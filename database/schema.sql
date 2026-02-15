@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS orders (
   payment_status text DEFAULT 'pending' CHECK (payment_status IN (
     'pending', 'processing', 'paid', 'failed', 'refunded'
   )),
+  payment_reference text,                    -- orderNumber sent to Tilopay
+  payment_link text,                         -- Tilopay payment URL
   subtotal numeric(10,2) NOT NULL DEFAULT 0,
   delivery_fee numeric(10,2) DEFAULT 0,
   total numeric(10,2) NOT NULL DEFAULT 0,

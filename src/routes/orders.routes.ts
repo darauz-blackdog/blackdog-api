@@ -4,6 +4,7 @@ import { supabase } from '../config/supabase.js';
 import { create, searchRead, execute_kw } from '../config/odoo.js';
 import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
+import { createPaymentLink } from '../services/tilopay.service.js';
 
 const router = Router();
 
@@ -159,6 +160,8 @@ router.post('/orders', async (req: Request, res: Response) => {
     }
 
     // 6. Create order in Supabase
+    const orderNumber = odooOrderName ?? `BDAPP-${Date.now().toString(36).toUpperCase()}`;
+
     const { data: order, error: orderError } = await supabase
       .from('orders')
       .insert({
@@ -171,6 +174,7 @@ router.post('/orders', async (req: Request, res: Response) => {
         address_id: delivery_type === 'delivery' ? address_id : null,
         payment_method,
         payment_status: payment_method === 'in_store' ? 'pending' : 'pending',
+        payment_reference: orderNumber,
         subtotal: Math.round(subtotal * 100) / 100,
         delivery_fee: deliveryFee,
         total,
@@ -216,13 +220,44 @@ router.post('/orders', async (req: Request, res: Response) => {
       items: orderItems,
     };
 
-    // TODO: Generate payment URLs for Tilopay/Yappy when integrated
+    // Generate payment link for Tilopay
     if (payment_method === 'tilopay') {
-      response.payment_url = null; // Will be populated when Tilopay is integrated
-      response.payment_message = 'Tilopay integration pending — use in_store for now';
+      try {
+        // Get customer info for payment link
+        const { data: custProfile } = await supabase
+          .from('customer_profiles')
+          .select('full_name, phone')
+          .eq('id', userId)
+          .single();
+
+        const customerEmail = (req as AuthenticatedRequest).user.email;
+        const customerName = custProfile?.full_name ?? 'Cliente';
+
+        const paymentResult = await createPaymentLink({
+          orderNumber,
+          amount: total,
+          customerName,
+          customerEmail,
+          customerPhone: custProfile?.phone ?? '',
+        });
+
+        response.payment_url = paymentResult.payment_link;
+
+        // Store payment link on the order
+        await supabase
+          .from('orders')
+          .update({ payment_link: paymentResult.payment_link })
+          .eq('id', order.id);
+
+        logger.info({ orderId: order.id, paymentLink: paymentResult.payment_link }, 'Tilopay payment link generated');
+      } catch (payErr) {
+        logger.warn({ err: payErr }, 'Failed to generate Tilopay payment link (non-blocking)');
+        response.payment_url = null;
+        response.payment_message = 'Error generando link de pago. Intenta de nuevo desde tus pedidos.';
+      }
     } else if (payment_method === 'yappy') {
       response.payment_url = null;
-      response.payment_message = 'Yappy integration pending — use in_store for now';
+      response.payment_message = 'Yappy integration pending';
     }
 
     res.status(201).json(response);

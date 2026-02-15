@@ -19,6 +19,13 @@ const envSchema = z.object({
   SYNC_PRODUCTS_INTERVAL: z.string().default('*/5 * * * *'),
   SYNC_CATEGORIES_INTERVAL: z.string().default('0 * * * *'),
   SYNC_STOCK_INTERVAL: z.string().default('*/5 * * * *'),
+
+  // Tilopay
+  TILOPAY_API_USER: z.string().default(''),
+  TILOPAY_API_PASSWORD: z.string().default(''),
+  TILOPAY_API_KEY: z.string().default(''),
+  TILOPAY_API_BASE_URL: z.string().default('https://app.tilopay.com'),
+  TILOPAY_REDIRECT_URL: z.string().default(''),
 });
 
 const parsed = envSchema.safeParse(process.env);

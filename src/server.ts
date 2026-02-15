@@ -10,6 +10,7 @@ import authRoutes from './routes/auth.routes.js';
 import productsRoutes from './routes/products.routes.js';
 import cartRoutes from './routes/cart.routes.js';
 import ordersRoutes from './routes/orders.routes.js';
+import paymentsRoutes from './routes/payments.routes.js';
 import { startSyncJobs } from './sync/scheduler.js';
 
 const app = express();
@@ -26,6 +27,7 @@ app.use('/api', authRoutes);
 app.use('/api', productsRoutes);
 app.use('/api', cartRoutes);
 app.use('/api', ordersRoutes);
+app.use('/api', paymentsRoutes);
 
 // Error handler (must be last)
 app.use(errorHandler);
