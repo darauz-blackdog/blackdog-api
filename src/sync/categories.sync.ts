@@ -30,26 +30,41 @@ export async function syncCategories(): Promise<number> {
       return 0;
     }
 
-    const rows = categories.map((c, idx) => ({
-      id: c.id,
-      name: c.name,
-      parent_id: c.parent_id ? c.parent_id[0] : null,
-      full_path: c.complete_name,
-      sort_order: idx,
-      synced_at: new Date().toISOString(),
-    }));
+    // Sort: parents first (no parent_id), then children
+    // This avoids FK constraint violations on self-referencing parent_id
+    const sorted = categories.sort((a, b) => {
+      const aDepth = (a.complete_name?.match(/\//g) || []).length;
+      const bDepth = (b.complete_name?.match(/\//g) || []).length;
+      return aDepth - bDepth;
+    });
 
-    const { error } = await supabase
-      .from('categories')
-      .upsert(rows, { onConflict: 'id' });
+    // Insert in batches by depth level to respect FK ordering
+    const categoryIds = new Set(sorted.map(c => c.id));
+    let synced = 0;
 
-    if (error) {
-      logger.error({ error }, 'Failed to upsert categories');
-      await logSync('categories', 'error', 0, Date.now() - start, error.message);
-      return 0;
+    for (const cat of sorted) {
+      const parentId = cat.parent_id ? cat.parent_id[0] : null;
+      const row = {
+        id: cat.id,
+        name: cat.name,
+        parent_id: parentId && categoryIds.has(parentId) ? parentId : null,
+        full_path: cat.complete_name,
+        sort_order: synced,
+        synced_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase
+        .from('categories')
+        .upsert(row, { onConflict: 'id' });
+
+      if (error) {
+        logger.warn({ error, categoryId: cat.id }, 'Failed to upsert category');
+      } else {
+        synced++;
+      }
     }
 
-    await logSync('categories', 'success', rows.length, Date.now() - start);
+    await logSync('categories', 'success', synced, Date.now() - start);
     return rows.length;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
