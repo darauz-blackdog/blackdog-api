@@ -6,6 +6,7 @@ import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
 import { createPaymentLink } from '../services/tilopay.service.js';
 import { getPaymentInstructions } from '../services/yappy.service.js';
+import { notifyOrderStatusChange } from '../services/push.service.js';
 
 const router = Router();
 
@@ -395,6 +396,9 @@ router.post('/orders/:id/cancel', async (req: Request, res: Response) => {
       message: 'Pedido cancelado por el cliente',
     });
 
+    // Send push notification
+    notifyOrderStatusChange(userId, orderId, 'cancelled').catch(() => {});
+
     // Cancel in Odoo if exists
     if (order.odoo_order_id) {
       try {
@@ -409,6 +413,105 @@ router.post('/orders/:id/cancel', async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, 'Cancel order error');
     res.status(500).json({ error: 'Failed to cancel order' });
+  }
+});
+
+// ================================================================
+// ADMIN / ODOO STATUS UPDATES
+// ================================================================
+
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  pending_payment: ['confirmed', 'cancelled'],
+  confirmed: ['preparing', 'cancelled'],
+  preparing: ['ready_pickup', 'shipping', 'cancelled'],
+  ready_pickup: ['delivered', 'cancelled'],
+  shipping: ['delivered', 'cancelled'],
+};
+
+/**
+ * POST /api/admin/orders/:id/status
+ * Update order status (for Odoo webhooks or admin panel).
+ * Authenticated via X-API-Key header matching SUPABASE_SERVICE_ROLE_KEY.
+ *
+ * Body: { status, message?, driver_name?, driver_phone? }
+ */
+router.post('/admin/orders/:id/status', async (req: Request, res: Response) => {
+  // Authenticate via API key (service role key)
+  const apiKey = req.headers['x-api-key'] as string;
+  if (!apiKey || apiKey !== process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    res.status(401).json({ error: 'Invalid API key' });
+    return;
+  }
+
+  const orderId = req.params.id;
+  const { status: newStatus, message, driver_name, driver_phone } = req.body;
+
+  if (!newStatus) {
+    res.status(400).json({ error: 'status is required' });
+    return;
+  }
+
+  try {
+    // Get current order (use service role supabase — no RLS)
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, user_id, status, odoo_order_name')
+      .eq('id', orderId)
+      .single();
+
+    if (!order) {
+      res.status(404).json({ error: 'Order not found' });
+      return;
+    }
+
+    // Validate transition
+    const allowed = VALID_TRANSITIONS[order.status];
+    if (!allowed || !allowed.includes(newStatus)) {
+      res.status(400).json({
+        error: `Invalid transition: "${order.status}" → "${newStatus}"`,
+        allowed_transitions: allowed ?? [],
+      });
+      return;
+    }
+
+    // Update order status
+    await supabase
+      .from('orders')
+      .update({ status: newStatus, updated_at: new Date().toISOString() })
+      .eq('id', orderId);
+
+    // Add tracking entry
+    const defaultMessages: Record<string, string> = {
+      confirmed: 'Pedido confirmado',
+      preparing: 'Tu pedido está siendo preparado',
+      ready_pickup: 'Tu pedido está listo para retirar',
+      shipping: 'Tu pedido va en camino',
+      delivered: 'Pedido entregado',
+      cancelled: 'Pedido cancelado',
+    };
+
+    await supabase.from('order_tracking').insert({
+      order_id: orderId,
+      status: newStatus,
+      message: message ?? defaultMessages[newStatus] ?? `Estado: ${newStatus}`,
+      driver_name: driver_name ?? null,
+      driver_phone: driver_phone ?? null,
+    });
+
+    // Send push notification to the customer
+    notifyOrderStatusChange(order.user_id, orderId, newStatus, message).catch(() => {});
+
+    logger.info({ orderId, oldStatus: order.status, newStatus }, 'Order status updated (admin)');
+
+    res.json({
+      message: 'Order status updated',
+      order_id: orderId,
+      old_status: order.status,
+      new_status: newStatus,
+    });
+  } catch (err) {
+    logger.error({ err }, 'Admin order status update error');
+    res.status(500).json({ error: 'Failed to update order status' });
   }
 });
 

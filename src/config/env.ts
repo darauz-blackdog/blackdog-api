@@ -27,6 +27,11 @@ const envSchema = z.object({
   TILOPAY_API_BASE_URL: z.string().default('https://app.tilopay.com'),
   TILOPAY_REDIRECT_URL: z.string().default(''),
 
+  // Firebase (FCM push notifications)
+  FIREBASE_PROJECT_ID: z.string().default(''),
+  FIREBASE_CLIENT_EMAIL: z.string().default(''),
+  FIREBASE_PRIVATE_KEY: z.string().default(''),
+
   // Yappy
   YAPPY_API_KEY: z.string().default(''),
   YAPPY_SECRET_KEY: z.string().default(''),
