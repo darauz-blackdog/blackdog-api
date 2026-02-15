@@ -65,7 +65,7 @@ export async function syncCategories(): Promise<number> {
     }
 
     await logSync('categories', 'success', synced, Date.now() - start);
-    return rows.length;
+    return synced;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await logSync('categories', 'error', 0, Date.now() - start, message);
