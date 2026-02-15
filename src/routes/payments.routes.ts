@@ -4,6 +4,7 @@ import { supabase } from '../config/supabase.js';
 import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
 import { createPaymentLink, getPaymentStatus } from '../services/tilopay.service.js';
+import { isYappyConfigured, findMatchingPayment, getPaymentInstructions } from '../services/yappy.service.js';
 
 const router = Router();
 
@@ -337,6 +338,194 @@ router.get('/payments/tilopay/status/:order_id', requireAuth, async (req: Reques
   } catch (err) {
     logger.error({ err }, 'Tilopay status check error');
     res.status(500).json({ error: 'Failed to check payment status' });
+  }
+});
+
+// ================================================================
+// YAPPY PAYMENT ENDPOINTS
+// ================================================================
+
+/**
+ * GET /api/payments/yappy/instructions/:order_id
+ * Get payment instructions for a Yappy order.
+ * The app shows these so the customer knows how to pay via their Yappy app.
+ */
+router.get('/payments/yappy/instructions/:order_id', requireAuth, async (req: Request, res: Response) => {
+  const { id: userId } = (req as AuthenticatedRequest).user;
+  const orderId = req.params.order_id;
+
+  try {
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, total, payment_method, payment_reference, status, payment_status')
+      .eq('id', orderId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!order) {
+      res.status(404).json({ error: 'Order not found' });
+      return;
+    }
+
+    if (order.payment_method !== 'yappy') {
+      res.status(400).json({ error: 'Order payment method is not yappy' });
+      return;
+    }
+
+    // Already paid
+    if (order.payment_status === 'paid') {
+      res.json({ payment_status: 'paid', order_status: order.status });
+      return;
+    }
+
+    const instructions = getPaymentInstructions(
+      order.payment_reference ?? orderId.slice(0, 8).toUpperCase(),
+      order.total,
+    );
+
+    res.json({
+      ...instructions,
+      order_id: order.id,
+      payment_status: order.payment_status,
+      order_status: order.status,
+    });
+  } catch (err) {
+    logger.error({ err }, 'Yappy instructions error');
+    res.status(500).json({ error: 'Failed to get payment instructions' });
+  }
+});
+
+/**
+ * GET /api/payments/yappy/status/:order_id
+ * Check if a Yappy payment has been received for this order.
+ * Polls Yappy's movement history to match by amount + reference.
+ */
+router.get('/payments/yappy/status/:order_id', requireAuth, async (req: Request, res: Response) => {
+  const { id: userId } = (req as AuthenticatedRequest).user;
+  const orderId = req.params.order_id;
+
+  try {
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, total, payment_method, payment_reference, payment_status, status')
+      .eq('id', orderId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!order) {
+      res.status(404).json({ error: 'Order not found' });
+      return;
+    }
+
+    // Already resolved
+    if (order.payment_status === 'paid') {
+      res.json({ payment_status: 'paid', order_status: order.status });
+      return;
+    }
+
+    if (!isYappyConfigured()) {
+      res.json({
+        payment_status: order.payment_status,
+        order_status: order.status,
+        message: 'Yappy not configured yet — payment will be confirmed manually',
+      });
+      return;
+    }
+
+    // Search Yappy movement history for a matching payment
+    const match = await findMatchingPayment(
+      order.total,
+      order.payment_reference ?? undefined,
+    );
+
+    if (match) {
+      // Payment found — confirm order
+      await supabase
+        .from('orders')
+        .update({
+          status: 'confirmed',
+          payment_status: 'paid',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', orderId);
+
+      await supabase.from('order_tracking').insert({
+        order_id: orderId,
+        status: 'confirmed',
+        message: `Pago Yappy detectado (${match.debitorName ?? 'cliente'}, tx: ${match.transactionId ?? 'N/A'})`,
+      });
+
+      logger.info(
+        { orderId, yappyTx: match.transactionId, debitor: match.debitorName },
+        'Yappy payment matched and confirmed',
+      );
+
+      res.json({ payment_status: 'paid', order_status: 'confirmed' });
+    } else {
+      res.json({
+        payment_status: order.payment_status,
+        order_status: order.status,
+        message: 'Pago aún no detectado. Verifica que enviaste el monto exacto.',
+      });
+    }
+  } catch (err) {
+    logger.error({ err }, 'Yappy status check error');
+    res.status(500).json({ error: 'Failed to check Yappy payment status' });
+  }
+});
+
+/**
+ * POST /api/payments/yappy/confirm-manual/:order_id
+ * Manual confirmation endpoint (for admin/support use while Yappy API credentials are pending)
+ * In production, this would be restricted to admin users.
+ */
+router.post('/payments/yappy/confirm-manual/:order_id', requireAuth, async (req: Request, res: Response) => {
+  const { id: userId } = (req as AuthenticatedRequest).user;
+  const orderId = req.params.order_id;
+  const { confirmation_note } = req.body;
+
+  try {
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, payment_method, payment_status, status')
+      .eq('id', orderId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!order) {
+      res.status(404).json({ error: 'Order not found' });
+      return;
+    }
+
+    if (order.payment_status === 'paid') {
+      res.json({ message: 'Order already paid' });
+      return;
+    }
+
+    if (order.status !== 'pending_payment') {
+      res.status(400).json({ error: `Cannot confirm order in "${order.status}" status` });
+      return;
+    }
+
+    await supabase
+      .from('orders')
+      .update({
+        status: 'confirmed',
+        payment_status: 'paid',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', orderId);
+
+    await supabase.from('order_tracking').insert({
+      order_id: orderId,
+      status: 'confirmed',
+      message: `Pago Yappy confirmado manualmente${confirmation_note ? ': ' + confirmation_note : ''}`,
+    });
+
+    res.json({ message: 'Order confirmed', order_status: 'confirmed', payment_status: 'paid' });
+  } catch (err) {
+    logger.error({ err }, 'Yappy manual confirm error');
+    res.status(500).json({ error: 'Failed to confirm payment' });
   }
 });
 

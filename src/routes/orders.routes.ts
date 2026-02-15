@@ -5,6 +5,7 @@ import { create, searchRead, execute_kw } from '../config/odoo.js';
 import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
 import { createPaymentLink } from '../services/tilopay.service.js';
+import { getPaymentInstructions } from '../services/yappy.service.js';
 
 const router = Router();
 
@@ -257,7 +258,7 @@ router.post('/orders', async (req: Request, res: Response) => {
       }
     } else if (payment_method === 'yappy') {
       response.payment_url = null;
-      response.payment_message = 'Yappy integration pending';
+      response.yappy = getPaymentInstructions(orderNumber, total);
     }
 
     res.status(201).json(response);

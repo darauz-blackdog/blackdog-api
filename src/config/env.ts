@@ -26,6 +26,14 @@ const envSchema = z.object({
   TILOPAY_API_KEY: z.string().default(''),
   TILOPAY_API_BASE_URL: z.string().default('https://app.tilopay.com'),
   TILOPAY_REDIRECT_URL: z.string().default(''),
+
+  // Yappy
+  YAPPY_API_KEY: z.string().default(''),
+  YAPPY_SECRET_KEY: z.string().default(''),
+  YAPPY_API_BASE_URL: z.string().default('https://api.yappy.com.pa'),
+  YAPPY_COLLECTION_ALIAS: z.string().default(''),
+  YAPPY_GROUP_ID: z.string().default(''),
+  YAPPY_DEVICE_ID: z.string().default(''),
 });
 
 const parsed = envSchema.safeParse(process.env);
