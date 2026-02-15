@@ -283,8 +283,13 @@ router.get('/categories', async (req: Request, res: Response) => {
 /**
  * GET /api/branches
  * List all store branches
+ * Query: ?lat=9.0&lng=-79.5 → adds distance_km and sorts by nearest
  */
 router.get('/branches', async (req: Request, res: Response) => {
+  const lat = parseFloat(req.query.lat as string);
+  const lng = parseFloat(req.query.lng as string);
+  const hasCoords = !isNaN(lat) && !isNaN(lng);
+
   try {
     const { data, error } = await supabase
       .from('branches')
@@ -296,11 +301,67 @@ router.get('/branches', async (req: Request, res: Response) => {
       return;
     }
 
-    res.json({ data });
+    let branches = data ?? [];
+
+    // Add distance and sort by nearest if coordinates provided
+    if (hasCoords) {
+      branches = branches.map((b) => {
+        const bLat = b.latitude;
+        const bLng = b.longitude;
+        const distance_km = bLat && bLng ? haversineKm(lat, lng, bLat, bLng) : null;
+        return { ...b, distance_km };
+      });
+      branches.sort((a, b) => {
+        if (a.distance_km === null) return 1;
+        if (b.distance_km === null) return -1;
+        return a.distance_km - b.distance_km;
+      });
+    }
+
+    res.json({ data: branches });
   } catch (err) {
     logger.error({ err }, 'Branches error');
     res.status(500).json({ error: 'Failed to fetch branches' });
   }
 });
+
+/**
+ * GET /api/branches/:id
+ * Get a single branch with full details
+ */
+router.get('/branches/:id', async (req: Request, res: Response) => {
+  const branchId = req.params.id;
+
+  try {
+    const { data, error } = await supabase
+      .from('branches')
+      .select('*')
+      .eq('id', branchId)
+      .single();
+
+    if (error || !data) {
+      res.status(404).json({ error: 'Branch not found' });
+      return;
+    }
+
+    res.json(data);
+  } catch (err) {
+    logger.error({ err }, 'Branch detail error');
+    res.status(500).json({ error: 'Failed to fetch branch' });
+  }
+});
+
+/**
+ * Haversine formula — distance in km between two lat/lng points
+ */
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371; // Earth radius in km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 100) / 100;
+}
 
 export default router;
