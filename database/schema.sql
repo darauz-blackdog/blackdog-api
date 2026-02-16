@@ -15,6 +15,11 @@ CREATE TABLE IF NOT EXISTS products (
   default_code text,                        -- SKU
   description text,
   image_url text,
+  shopify_id bigint,                       -- Shopify product ID
+  description_html text,                   -- Rich HTML description from Shopify
+  tags text[] DEFAULT '{}',                -- Product tags from Shopify
+  image_urls text[] DEFAULT '{}',          -- Array of CDN image URLs from Shopify
+  handle text,                             -- Shopify URL handle
   is_published boolean DEFAULT true,
   odoo_updated_at timestamptz,
   synced_at timestamptz DEFAULT now()
@@ -23,6 +28,8 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE INDEX idx_products_category ON products(category_id);
 CREATE INDEX idx_products_published ON products(is_published) WHERE is_published = true;
 CREATE INDEX idx_products_name_search ON products USING gin(to_tsvector('spanish', name));
+CREATE INDEX idx_products_shopify_id ON products(shopify_id);
+CREATE INDEX idx_products_handle ON products(handle);
 
 -- Categories (cache from Odoo)
 CREATE TABLE IF NOT EXISTS categories (

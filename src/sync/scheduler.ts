@@ -5,6 +5,7 @@ import { syncProducts } from './products.sync.js';
 import { syncCategories } from './categories.sync.js';
 import { syncStock } from './stock.sync.js';
 import { syncBranches } from './branches.sync.js';
+import { syncShopify } from './shopify.sync.js';
 
 export function startSyncJobs() {
   logger.info('Starting sync jobs...');
@@ -53,6 +54,17 @@ export function startSyncJobs() {
     }
   });
 
+  // Shopify enrichment: daily at 4am (images/descriptions don't change often)
+  cron.schedule('0 4 * * *', async () => {
+    logger.info('Running Shopify sync...');
+    try {
+      const count = await syncShopify();
+      logger.info({ count }, 'Shopify sync completed');
+    } catch (err) {
+      logger.error({ err }, 'Shopify sync failed');
+    }
+  });
+
   // Run initial sync on startup
   runInitialSync();
 }
@@ -64,6 +76,8 @@ async function runInitialSync() {
     await syncBranches();
     await syncProducts();
     await syncStock();
+    // Shopify enrichment (runs after products are in DB)
+    await syncShopify();
     logger.info('Initial sync completed');
   } catch (err) {
     logger.error({ err }, 'Initial sync failed — will retry on next cron cycle');
