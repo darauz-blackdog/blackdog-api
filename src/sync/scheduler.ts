@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
-import { syncProducts } from './products.sync.js';
+import { syncProducts, syncProductsFull } from './products.sync.js';
 import { syncCategories } from './categories.sync.js';
 import { syncStock } from './stock.sync.js';
 import { syncBranches } from './branches.sync.js';
@@ -74,7 +74,8 @@ async function runInitialSync() {
   try {
     await syncCategories();
     await syncBranches();
-    await syncProducts();
+    // Full product sync on startup (all 3800+ products from Odoo)
+    await syncProductsFull();
     await syncStock();
     // Shopify enrichment (runs after products are in DB)
     await syncShopify();

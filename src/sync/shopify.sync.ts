@@ -1,3 +1,4 @@
+import { searchRead } from '../config/odoo.js';
 import { supabase } from '../config/supabase.js';
 import { logger } from '../config/logger.js';
 import { logSync } from './sync-utils.js';
@@ -8,8 +9,6 @@ const PAGE_SIZE = 250; // Shopify max per page
 interface ShopifyImage {
   id: number;
   src: string;
-  width?: number;
-  height?: number;
 }
 
 interface ShopifyVariant {
@@ -17,6 +16,7 @@ interface ShopifyVariant {
   sku: string;
   price: string;
   compare_at_price: string | null;
+  barcode: string | null;
 }
 
 interface ShopifyProduct {
@@ -24,15 +24,18 @@ interface ShopifyProduct {
   title: string;
   handle: string;
   body_html: string | null;
-  tags: string;
+  tags: string | string[];
   images: ShopifyImage[];
   variants: ShopifyVariant[];
-  published_at: string | null;
+}
+
+interface OdooShopifyMapping {
+  shopify_tmpl_id: string;
+  product_tmpl_id: [number, string] | false;
 }
 
 /**
  * Fetch all products from Shopify's public JSON API.
- * Paginates through all pages (250 per page).
  */
 async function fetchAllShopifyProducts(): Promise<ShopifyProduct[]> {
   const allProducts: ShopifyProduct[] = [];
@@ -47,7 +50,6 @@ async function fetchAllShopifyProducts(): Promise<ShopifyProduct[]> {
     }
 
     const json = await res.json() as { products: ShopifyProduct[] };
-
     if (!json.products || json.products.length === 0) break;
 
     allProducts.push(...json.products);
@@ -55,8 +57,6 @@ async function fetchAllShopifyProducts(): Promise<ShopifyProduct[]> {
 
     if (json.products.length < PAGE_SIZE) break;
     page++;
-
-    // Small delay to be polite
     await new Promise(r => setTimeout(r, 500));
   }
 
@@ -64,17 +64,55 @@ async function fetchAllShopifyProducts(): Promise<ShopifyProduct[]> {
 }
 
 /**
- * Build a lookup map from existing products in Supabase.
- * We match by default_code (SKU) first, then by normalized name.
+ * Fetch Shopify→Odoo product mapping from Odoo's shopify.product.template.ept model.
+ * Returns a map: Shopify template ID (string) → Odoo product.template ID (number)
  */
-async function buildProductLookup(): Promise<{
+async function fetchOdooShopifyMapping(): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+
+  try {
+    let offset = 0;
+    const batchSize = 500;
+
+    while (true) {
+      const records = await searchRead<OdooShopifyMapping>(
+        'shopify.product.template.ept',
+        [['exported_in_shopify', '=', true]],
+        ['shopify_tmpl_id', 'product_tmpl_id'],
+        { limit: batchSize, offset }
+      );
+
+      if (!records || records.length === 0) break;
+
+      for (const r of records) {
+        if (r.shopify_tmpl_id && r.product_tmpl_id && r.product_tmpl_id !== false) {
+          const odooId = Array.isArray(r.product_tmpl_id) ? r.product_tmpl_id[0] : r.product_tmpl_id;
+          map.set(r.shopify_tmpl_id, odooId as number);
+        }
+      }
+
+      offset += batchSize;
+      if (records.length < batchSize) break;
+    }
+
+    logger.info({ count: map.size }, 'Fetched Odoo→Shopify mapping');
+  } catch (err) {
+    logger.error({ err }, 'Failed to fetch Odoo→Shopify mapping, falling back to SKU/name matching');
+  }
+
+  return map;
+}
+
+/**
+ * Build a fallback lookup map from existing products in Supabase (by SKU and name).
+ */
+async function buildFallbackLookup(): Promise<{
   bySku: Map<string, number>;
   byName: Map<string, number>;
 }> {
   const bySku = new Map<string, number>();
   const byName = new Map<string, number>();
 
-  // Fetch all products (id, name, default_code) in pages
   let offset = 0;
   const pageSize = 1000;
 
@@ -111,7 +149,7 @@ function normalizeName(name: string): string {
 }
 
 /**
- * Main sync: fetch Shopify products, match to Supabase, enrich with images/description/tags.
+ * Main sync: fetch Shopify products, match to Supabase via Odoo mapping + fallback, enrich.
  */
 export async function syncShopify(): Promise<number> {
   const start = Date.now();
@@ -119,20 +157,45 @@ export async function syncShopify(): Promise<number> {
   try {
     logger.info('Starting Shopify sync...');
 
-    const shopifyProducts = await fetchAllShopifyProducts();
-    logger.info({ count: shopifyProducts.length }, 'Fetched Shopify products');
+    // Fetch data from all three sources in parallel
+    const [shopifyProducts, odooMapping, fallback] = await Promise.all([
+      fetchAllShopifyProducts(),
+      fetchOdooShopifyMapping(),
+      buildFallbackLookup(),
+    ]);
+
+    logger.info({
+      shopify: shopifyProducts.length,
+      odooMap: odooMapping.size,
+      skus: fallback.bySku.size,
+      names: fallback.byName.size,
+    }, 'All data fetched for matching');
 
     if (shopifyProducts.length === 0) {
       await logSync('shopify', 'success', 0, Date.now() - start);
       return 0;
     }
 
-    const { bySku, byName } = await buildProductLookup();
-    logger.info({ skuCount: bySku.size, nameCount: byName.size }, 'Built product lookup');
+    // Build set of existing product IDs in Supabase for validation
+    const existingIds = new Set<number>();
+    let offset = 0;
+    while (true) {
+      const { data } = await supabase
+        .from('products')
+        .select('id')
+        .range(offset, offset + 999);
+      if (!data || data.length === 0) break;
+      for (const p of data) existingIds.add(p.id);
+      offset += 1000;
+      if (data.length < 1000) break;
+    }
 
     // Match and prepare updates
-    let matched = 0;
+    let matchedByOdoo = 0;
+    let matchedBySku = 0;
+    let matchedByName = 0;
     let unmatched = 0;
+
     const updates: Array<{
       id: number;
       shopify_id: number;
@@ -142,31 +205,50 @@ export async function syncShopify(): Promise<number> {
       handle: string;
     }> = [];
 
-    for (const sp of shopifyProducts) {
-      // Try to match: first by SKU from any variant, then by name
-      let productId: number | undefined;
+    // Track already-matched product IDs to avoid duplicates
+    const matchedProductIds = new Set<number>();
 
-      // Check SKUs from variants
-      for (const v of sp.variants) {
-        if (v.sku) {
-          productId = bySku.get(v.sku.trim().toUpperCase());
-          if (productId) break;
+    for (const sp of shopifyProducts) {
+      let productId: number | undefined;
+      let matchMethod = '';
+
+      // 1. Primary: Odoo direct mapping (shopify_tmpl_id → product_tmpl_id)
+      const odooId = odooMapping.get(String(sp.id));
+      if (odooId && existingIds.has(odooId)) {
+        productId = odooId;
+        matchMethod = 'odoo';
+      }
+
+      // 2. Fallback: match by SKU from variants
+      if (!productId) {
+        for (const v of sp.variants) {
+          if (v.sku) {
+            productId = fallback.bySku.get(v.sku.trim().toUpperCase());
+            if (productId) {
+              matchMethod = 'sku';
+              break;
+            }
+          }
         }
       }
 
-      // Fallback: match by normalized name
+      // 3. Last resort: match by normalized name
       if (!productId) {
-        productId = byName.get(normalizeName(sp.title));
+        productId = fallback.byName.get(normalizeName(sp.title));
+        if (productId) matchMethod = 'name';
       }
 
-      if (!productId) {
+      if (!productId || matchedProductIds.has(productId)) {
         unmatched++;
         continue;
       }
 
-      matched++;
+      matchedProductIds.add(productId);
+      if (matchMethod === 'odoo') matchedByOdoo++;
+      else if (matchMethod === 'sku') matchedBySku++;
+      else matchedByName++;
 
-      // Parse tags (Shopify usually sends comma-separated string, but may send array)
+      // Parse tags
       let tags: string[] = [];
       if (Array.isArray(sp.tags)) {
         tags = sp.tags.map((t: string) => String(t).trim()).filter(Boolean);
@@ -174,7 +256,6 @@ export async function syncShopify(): Promise<number> {
         tags = sp.tags.split(',').map(t => t.trim()).filter(Boolean);
       }
 
-      // Get image URLs (use Shopify CDN URLs)
       const imageUrls = sp.images.map(img => img.src);
 
       updates.push({
@@ -187,7 +268,13 @@ export async function syncShopify(): Promise<number> {
       });
     }
 
-    logger.info({ matched, unmatched }, 'Shopify product matching complete');
+    logger.info({
+      total: matchedByOdoo + matchedBySku + matchedByName,
+      byOdoo: matchedByOdoo,
+      bySku: matchedBySku,
+      byName: matchedByName,
+      unmatched,
+    }, 'Shopify product matching complete');
 
     // Update existing products in parallel batches of 20
     let synced = 0;
@@ -208,7 +295,7 @@ export async function syncShopify(): Promise<number> {
       }
     }
 
-    logger.info({ synced, total: updates.length }, 'Shopify sync upsert complete');
+    logger.info({ synced, total: updates.length }, 'Shopify sync complete');
     await logSync('shopify', 'success', synced, Date.now() - start);
     return synced;
   } catch (err) {
