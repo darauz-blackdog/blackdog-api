@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { errorHandler } from './middleware/error-handler.js';
@@ -18,9 +20,31 @@ import { startSyncJobs } from './sync/scheduler.js';
 const app = express();
 
 // Security & parsing
-app.use(helmet());
 app.use(cors());
 app.use(express.json());
+
+// Preview pages: no helmet (internal tool)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+app.use('/preview', express.static(path.join(__dirname, '..', 'public')));
+
+// API: helmet security
+app.use('/api', helmet({
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'self'"],
+      baseUri: ["'self'"],
+      fontSrc: ["'self'", "https:", "data:"],
+      formAction: ["'self'"],
+      frameAncestors: ["'self'"],
+      imgSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      scriptSrc: ["'self'"],
+      scriptSrcAttr: ["'none'"],
+      styleSrc: ["'self'", "https:", "'unsafe-inline'"],
+    },
+  },
+}));
 app.use('/api', apiLimiter);
 
 // Routes

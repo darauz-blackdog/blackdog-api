@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><title>Test API</title></head>
+<body>
+<h1>API Test</h1>
+<pre id="out">Cargando...</pre>
+<script>
+const el = document.getElementById('out');
+el.textContent = 'Fetching: ' + window.location.origin + '/api/products?limit=2\n';
+
+fetch(window.location.origin + '/api/products?limit=2')
+  .then(r => {
+    el.textContent += 'Status: ' + r.status + '\n';
+    return r.json();
+  })
+  .then(d => {
+    el.textContent += 'OK! Products: ' + d.data.length + '\n';
+    el.textContent += JSON.stringify(d.data[0], null, 2);
+  })
+  .catch(e => {
+    el.textContent += 'ERROR: ' + e.message + '\n';
+    el.textContent += 'Stack: ' + e.stack + '\n';
+  });
+</script>
+</body>
+</html>

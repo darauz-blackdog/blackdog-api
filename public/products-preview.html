@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BlackDog - Product Preview</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #1A1A2E; }
+    .header { background: #1A1A2E; color: #F7B104; padding: 16px 24px; position: sticky; top: 0; z-index: 10; }
+    .header h1 { font-size: 20px; }
+    .header .stats { font-size: 13px; color: #ccc; margin-top: 4px; }
+    .controls { padding: 12px 24px; background: #fff; border-bottom: 1px solid #ddd; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .controls select, .controls input { padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+    .controls input[type=text] { flex: 1; min-width: 200px; }
+    .controls label { font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; padding: 24px; }
+    .card { background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); transition: transform 0.15s; }
+    .card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+    .card .img-wrap { width: 100%; aspect-ratio: 1; background: #f0f0f0; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+    .card .img-wrap img { width: 100%; height: 100%; object-fit: contain; }
+    .card .no-img { color: #999; font-size: 13px; text-align: center; padding: 20px; }
+    .card .info { padding: 12px; }
+    .card .name { font-size: 14px; font-weight: 600; line-height: 1.3; height: 36px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .card .category { font-size: 11px; color: #888; margin-top: 4px; }
+    .card .price { font-size: 18px; font-weight: 700; color: #1A1A2E; margin-top: 6px; }
+    .card .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .card .tag { font-size: 10px; background: #FFF3CD; color: #856404; padding: 2px 6px; border-radius: 10px; }
+    .card .meta { font-size: 11px; color: #aaa; margin-top: 6px; display: flex; justify-content: space-between; }
+    .card.no-image { opacity: 0.6; }
+    .card .img-count { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.6); color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 8px; }
+    .loading { text-align: center; padding: 60px; font-size: 16px; color: #888; }
+    .pagination { display: flex; justify-content: center; gap: 8px; padding: 24px; }
+    .pagination button { padding: 8px 16px; border: 1px solid #ddd; background: #fff; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    .pagination button:hover { background: #F7B104; color: #1A1A2E; }
+    .pagination button:disabled { opacity: 0.4; cursor: default; }
+    .pagination button.active { background: #1A1A2E; color: #F7B104; border-color: #1A1A2E; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>BlackDog - Product Preview</h1>
+  <div class="stats" id="stats">Cargando...</div>
+</div>
+
+<div class="controls">
+  <input type="text" id="search" placeholder="Buscar producto...">
+  <select id="sort">
+    <option value="name">Nombre A-Z</option>
+    <option value="price_asc">Precio menor</option>
+    <option value="price_desc">Precio mayor</option>
+    <option value="newest">Mas recientes</option>
+  </select>
+  <select id="filter">
+    <option value="all">Todos</option>
+    <option value="with_images">Con imagen</option>
+    <option value="no_images">Sin imagen</option>
+  </select>
+  <label><input type="checkbox" id="showTags" checked> Tags</label>
+</div>
+
+<div class="grid" id="grid">
+  <div class="loading">Cargando productos...</div>
+</div>
+
+<div class="pagination" id="pagination"></div>
+
+<script>
+var API_BASE = window.location.origin + '/api';
+var currentPage = 1;
+var totalPages = 1;
+var searchTimeout = null;
+
+function escapeHtml(str) {
+  if (!str) return '';
+  var div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function fetchProducts(page) {
+  if (!page) page = 1;
+  var search = document.getElementById('search').value.trim();
+  var sort = document.getElementById('sort').value;
+  var filter = document.getElementById('filter').value;
+
+  var url;
+  if (search.length >= 2) {
+    url = API_BASE + '/products/search?q=' + encodeURIComponent(search) + '&page=' + page + '&limit=24&sort=' + sort;
+  } else {
+    url = API_BASE + '/products?page=' + page + '&limit=24&sort=' + sort;
+  }
+
+  document.getElementById('grid').innerHTML = '<div class="loading">Cargando...</div>';
+
+  fetch(url)
+    .then(function(res) { return res.json(); })
+    .then(function(json) {
+      var products = json.data || [];
+      totalPages = (json.pagination && json.pagination.total_pages) || 1;
+      currentPage = page;
+
+      if (filter === 'with_images') {
+        products = products.filter(function(p) { return p.image_urls && p.image_urls.length > 0; });
+      } else if (filter === 'no_images') {
+        products = products.filter(function(p) { return !p.image_urls || p.image_urls.length === 0; });
+      }
+
+      var total = (json.pagination && json.pagination.total) || 0;
+      var withImg = products.filter(function(p) { return p.image_urls && p.image_urls.length > 0; }).length;
+      document.getElementById('stats').textContent =
+        total + ' productos total | Pagina ' + currentPage + '/' + totalPages + ' | ' + withImg + '/' + products.length + ' con imagen en esta pagina';
+
+      renderProducts(products);
+      renderPagination();
+    })
+    .catch(function(e) {
+      document.getElementById('grid').innerHTML = '<div class="loading">Error: ' + e.message + '</div>';
+    });
+}
+
+function renderProducts(products) {
+  var showTags = document.getElementById('showTags').checked;
+  var grid = document.getElementById('grid');
+
+  if (products.length === 0) {
+    grid.innerHTML = '<div class="loading">No se encontraron productos</div>';
+    return;
+  }
+
+  grid.innerHTML = '';
+
+  products.forEach(function(p) {
+    var hasImage = p.image_urls && p.image_urls.length > 0;
+    var imgCount = p.image_urls ? p.image_urls.length : 0;
+    var catParts = (p.category_name || '').split(' / ');
+    var shortCat = escapeHtml(catParts.slice(-2).join(' > '));
+    var tags = (p.tags || []).slice(0, 4);
+
+    var card = document.createElement('div');
+    card.className = 'card' + (hasImage ? '' : ' no-image');
+
+    var imgWrap = document.createElement('div');
+    imgWrap.className = 'img-wrap';
+
+    if (hasImage) {
+      var img = document.createElement('img');
+      img.src = p.image_urls[0];
+      img.alt = p.name || '';
+      img.loading = 'lazy';
+      img.onerror = function() {
+        imgWrap.innerHTML = '<div class="no-img">Error cargando</div>';
+      };
+      imgWrap.appendChild(img);
+
+      if (imgCount > 1) {
+        var badge = document.createElement('span');
+        badge.className = 'img-count';
+        badge.textContent = imgCount + ' imgs';
+        imgWrap.appendChild(badge);
+      }
+    } else {
+      imgWrap.innerHTML = '<div class="no-img">Sin imagen<br><small>' + escapeHtml(p.default_code || ('ID: ' + p.id)) + '</small></div>';
+    }
+
+    var info = document.createElement('div');
+    info.className = 'info';
+
+    var nameDiv = document.createElement('div');
+    nameDiv.className = 'name';
+    nameDiv.title = p.name || '';
+    nameDiv.textContent = p.name || '';
+
+    var catDiv = document.createElement('div');
+    catDiv.className = 'category';
+    catDiv.textContent = shortCat;
+
+    var priceDiv = document.createElement('div');
+    priceDiv.className = 'price';
+    priceDiv.textContent = '$' + Number(p.list_price).toFixed(2);
+
+    info.appendChild(nameDiv);
+    info.appendChild(catDiv);
+    info.appendChild(priceDiv);
+
+    if (showTags && tags.length > 0) {
+      var tagsDiv = document.createElement('div');
+      tagsDiv.className = 'tags';
+      tags.forEach(function(t) {
+        var span = document.createElement('span');
+        span.className = 'tag';
+        span.textContent = t;
+        tagsDiv.appendChild(span);
+      });
+      if (p.tags && p.tags.length > 4) {
+        var more = document.createElement('span');
+        more.className = 'tag';
+        more.textContent = '+' + (p.tags.length - 4);
+        tagsDiv.appendChild(more);
+      }
+      info.appendChild(tagsDiv);
+    }
+
+    var metaDiv = document.createElement('div');
+    metaDiv.className = 'meta';
+    var metaLeft = document.createElement('span');
+    metaLeft.textContent = imgCount + ' img' + (imgCount !== 1 ? 's' : '');
+    var metaRight = document.createElement('span');
+    metaRight.textContent = p.handle ? 'Shopify' : 'Solo Odoo';
+    metaDiv.appendChild(metaLeft);
+    metaDiv.appendChild(metaRight);
+    info.appendChild(metaDiv);
+
+    card.appendChild(imgWrap);
+    card.appendChild(info);
+    grid.appendChild(card);
+  });
+}
+
+function renderPagination() {
+  var pag = document.getElementById('pagination');
+  if (totalPages <= 1) { pag.innerHTML = ''; return; }
+
+  pag.innerHTML = '';
+
+  var prevBtn = document.createElement('button');
+  prevBtn.textContent = 'Anterior';
+  prevBtn.disabled = currentPage === 1;
+  prevBtn.onclick = function() { fetchProducts(currentPage - 1); };
+  pag.appendChild(prevBtn);
+
+  var startPage = Math.max(1, currentPage - 3);
+  var endPage = Math.min(totalPages, currentPage + 3);
+
+  for (var i = startPage; i <= endPage; i++) {
+    (function(pageNum) {
+      var btn = document.createElement('button');
+      btn.textContent = pageNum;
+      if (pageNum === currentPage) btn.className = 'active';
+      btn.onclick = function() { fetchProducts(pageNum); };
+      pag.appendChild(btn);
+    })(i);
+  }
+
+  var nextBtn = document.createElement('button');
+  nextBtn.textContent = 'Siguiente';
+  nextBtn.disabled = currentPage === totalPages;
+  nextBtn.onclick = function() { fetchProducts(currentPage + 1); };
+  pag.appendChild(nextBtn);
+}
+
+document.getElementById('search').addEventListener('input', function() {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(function() { fetchProducts(1); }, 400);
+});
+document.getElementById('sort').addEventListener('change', function() { fetchProducts(1); });
+document.getElementById('filter').addEventListener('change', function() { fetchProducts(currentPage); });
+document.getElementById('showTags').addEventListener('change', function() { fetchProducts(currentPage); });
+
+fetchProducts(1);
+</script>
+</body>
+</html>
