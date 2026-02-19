@@ -52,13 +52,12 @@ router.get('/products', async (req: Request, res: Response) => {
       return;
     }
 
-    // Enrich data with total_stock and filter if needed
-    // Note: For now we'll just enrich so the UI can decide, 
-    // but the task said "filter out", so I will filter them.
+    // Enrich data with total_stock and strip raw stock_by_branch join data
     const enrichedData = (data ?? []).map(p => {
-      const stock = (p as any).stock_by_branch as any[] ?? [];
-      const totalStock = stock.reduce((sum, s) => sum + (s.qty_available ?? 0), 0);
-      return { ...p, total_stock: totalStock };
+      const { stock_by_branch, ...rest } = p as any;
+      const stock = (stock_by_branch as any[]) ?? [];
+      const totalStock = stock.reduce((sum: number, s: any) => sum + (s.qty_available ?? 0), 0);
+      return { ...rest, total_stock: totalStock };
     });
 
     res.json({
@@ -119,9 +118,10 @@ router.get('/products/search', async (req: Request, res: Response) => {
       }
 
       const enrichedFallback = (fallbackData ?? []).map(p => {
-        const stock = (p as any).stock_by_branch as any[] ?? [];
-        const totalStock = stock.reduce((sum, s) => sum + (s.qty_available ?? 0), 0);
-        return { ...p, total_stock: totalStock };
+        const { stock_by_branch, ...rest } = p as any;
+        const stock = (stock_by_branch as any[]) ?? [];
+        const totalStock = stock.reduce((sum: number, s: any) => sum + (s.qty_available ?? 0), 0);
+        return { ...rest, total_stock: totalStock };
       });
 
       res.json({
@@ -137,9 +137,10 @@ router.get('/products/search', async (req: Request, res: Response) => {
     }
 
     const enrichedData = (data ?? []).map(p => {
-      const stock = (p as any).stock_by_branch as any[] ?? [];
-      const totalStock = stock.reduce((sum, s) => sum + (s.qty_available ?? 0), 0);
-      return { ...p, total_stock: totalStock };
+      const { stock_by_branch, ...rest } = p as any;
+      const stock = (stock_by_branch as any[]) ?? [];
+      const totalStock = stock.reduce((sum: number, s: any) => sum + (s.qty_available ?? 0), 0);
+      return { ...rest, total_stock: totalStock };
     });
 
     res.json({
@@ -185,7 +186,7 @@ router.get('/products/featured', async (req: Request, res: Response) => {
       return;
     }
 
-    // Deduplicate and enrich with total_stock
+    // Deduplicate and enrich with total_stock, strip raw stock_by_branch join data
     const seen = new Set<number>();
     const enrichedUnique: any[] = [];
 
@@ -193,11 +194,12 @@ router.get('/products/featured', async (req: Request, res: Response) => {
       if (seen.has(p.id)) continue;
       seen.add(p.id);
 
-      const stock = (p as any).stock_by_branch as any[] ?? [];
-      const totalStock = stock.reduce((sum, s) => sum + (s.qty_available ?? 0), 0);
+      const { stock_by_branch, ...rest } = p as any;
+      const stock = (Array.isArray(stock_by_branch) ? stock_by_branch : []) as any[];
+      const totalStock = stock.reduce((sum: number, s: any) => sum + (s.qty_available ?? 0), 0);
 
       enrichedUnique.push({
-        ...p,
+        ...rest,
         total_stock: totalStock
       });
 
