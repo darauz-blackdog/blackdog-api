@@ -20,7 +20,7 @@ router.get('/products', async (req: Request, res: Response) => {
 
     let query = supabase
       .from('products')
-      .select('*, stock_by_branch(qty_available)', { count: 'exact' })
+      .select('*', { count: 'exact' })
       .eq('is_published', true);
 
     if (categoryId) {
@@ -44,7 +44,7 @@ router.get('/products', async (req: Request, res: Response) => {
 
     query = query.range(offset, offset + limit - 1);
 
-    const { data, error, count } = await query;
+    const { data: products, error, count } = await query;
 
     if (error) {
       logger.error({ error }, 'Failed to fetch products');
@@ -52,13 +52,40 @@ router.get('/products', async (req: Request, res: Response) => {
       return;
     }
 
-    // Enrich data with total_stock and strip raw stock_by_branch join data
-    const enrichedData = (data ?? []).map(p => {
-      const { stock_by_branch, ...rest } = p as any;
-      const stock = (stock_by_branch as any[]) ?? [];
-      const totalStock = stock.reduce((sum: number, s: any) => sum + (s.qty_available ?? 0), 0);
-      return { ...rest, total_stock: totalStock };
-    });
+    if (!products || products.length === 0) {
+      res.json({
+        data: [],
+        pagination: {
+          page,
+          limit,
+          total: count ?? 0,
+          total_pages: Math.ceil((count ?? 0) / limit),
+        },
+      });
+      return;
+    }
+
+    // Manual join: Fetch stock for these products
+    const productIds = products.map(p => p.id);
+    const { data: stockData } = await supabase
+      .from('stock_by_branch')
+      .select('product_id, qty_available')
+      .in('product_id', productIds);
+
+    // Map stock by product_id
+    const stockMap = new Map<number, number>();
+    if (stockData) {
+      for (const s of stockData) {
+        const current = stockMap.get(s.product_id) ?? 0;
+        stockMap.set(s.product_id, current + (s.qty_available ?? 0));
+      }
+    }
+
+    // Enrich products
+    const enrichedData = products.map(p => ({
+      ...p,
+      total_stock: stockMap.get(p.id) ?? 0,
+    }));
 
     res.json({
       data: enrichedData,
@@ -95,18 +122,21 @@ router.get('/products/search', async (req: Request, res: Response) => {
     // Use full-text search with Spanish config
     const tsQuery = q.split(/\s+/).map(w => `${w}:*`).join(' & ');
 
-    const { data, error, count } = await supabase
+    const { data: products, error, count } = await supabase
       .from('products')
-      .select('*, stock_by_branch(qty_available)', { count: 'exact' })
+      .select('*', { count: 'exact' })
       .eq('is_published', true)
       .textSearch('name', tsQuery, { config: 'spanish' })
       .range(offset, offset + limit - 1);
+
+    let finalProducts = products;
+    let finalCount = count;
 
     if (error) {
       // Fallback to ILIKE if full-text search fails
       const { data: fallbackData, error: fallbackError, count: fallbackCount } = await supabase
         .from('products')
-        .select('*, stock_by_branch(qty_available)', { count: 'exact' })
+        .select('*', { count: 'exact' })
         .eq('is_published', true)
         .ilike('name', `%${q}%`)
         .order('name')
@@ -116,40 +146,52 @@ router.get('/products/search', async (req: Request, res: Response) => {
         res.status(500).json({ error: 'Search failed' });
         return;
       }
+      finalProducts = fallbackData;
+      finalCount = fallbackCount;
+    }
 
-      const enrichedFallback = (fallbackData ?? []).map(p => {
-        const { stock_by_branch, ...rest } = p as any;
-        const stock = (stock_by_branch as any[]) ?? [];
-        const totalStock = stock.reduce((sum: number, s: any) => sum + (s.qty_available ?? 0), 0);
-        return { ...rest, total_stock: totalStock };
-      });
-
+    if (!finalProducts || finalProducts.length === 0) {
       res.json({
-        data: enrichedFallback,
+        data: [],
         pagination: {
           page,
           limit,
-          total: fallbackCount ?? 0,
-          total_pages: Math.ceil((fallbackCount ?? 0) / limit),
+          total: finalCount ?? 0,
+          total_pages: Math.ceil((finalCount ?? 0) / limit),
         },
       });
       return;
     }
 
-    const enrichedData = (data ?? []).map(p => {
-      const { stock_by_branch, ...rest } = p as any;
-      const stock = (stock_by_branch as any[]) ?? [];
-      const totalStock = stock.reduce((sum: number, s: any) => sum + (s.qty_available ?? 0), 0);
-      return { ...rest, total_stock: totalStock };
-    });
+    // Manual join: Fetch stock for these products
+    const productIds = finalProducts.map(p => p.id);
+    const { data: stockData } = await supabase
+      .from('stock_by_branch')
+      .select('product_id, qty_available')
+      .in('product_id', productIds);
+
+    // Map stock by product_id
+    const stockMap = new Map<number, number>();
+    if (stockData) {
+      for (const s of stockData) {
+        const current = stockMap.get(s.product_id) ?? 0;
+        stockMap.set(s.product_id, current + (s.qty_available ?? 0));
+      }
+    }
+
+    // Enrich products
+    const enrichedData = finalProducts.map(p => ({
+      ...p,
+      total_stock: stockMap.get(p.id) ?? 0,
+    }));
 
     res.json({
       data: enrichedData,
       pagination: {
         page,
         limit,
-        total: count ?? 0,
-        total_pages: Math.ceil((count ?? 0) / limit),
+        total: finalCount ?? 0,
+        total_pages: Math.ceil((finalCount ?? 0) / limit),
       },
     });
   } catch (err) {
@@ -166,47 +208,60 @@ router.get('/products/search', async (req: Request, res: Response) => {
 router.get('/products/featured', async (req: Request, res: Response) => {
   try {
     const limit = Math.min(30, Math.max(1, parseInt(req.query.limit as string) || 12));
+    const accumulated: any[] = [];
+    let offset = 0;
+    const batchSize = 50;
+    const maxIterations = 10; // Safety break
 
-    // Get products that have stock somewhere
-    // We fetch more than the limit because deduplication will reduce the count
-    const { data, error } = await supabase
-      .from('products')
-      .select(`
-        *,
-        stock_by_branch!inner(qty_available)
-      `)
-      .eq('is_published', true)
-      .gt('stock_by_branch.qty_available', 0)
-      .order('list_price', { ascending: true })
-      .limit(limit * 3); // Fetch buffer for deduplication
+    for (let i = 0; i < maxIterations; i++) {
+      if (accumulated.length >= limit) break;
 
-    if (error) {
-      logger.error({ error }, 'Failed to fetch featured products');
-      res.status(500).json({ error: 'Failed to fetch featured products' });
-      return;
+      // Fetch batch of products ordered by price
+      const { data: products, error } = await supabase
+        .from('products')
+        .select('*')
+        .eq('is_published', true)
+        .order('list_price', { ascending: true })
+        .range(offset, offset + batchSize - 1);
+
+      if (error) {
+        throw error;
+      }
+
+      if (!products || products.length === 0) {
+        break; // No more products
+      }
+
+      // Fetch stock for this batch
+      const productIds = products.map(p => p.id);
+      const { data: stockData } = await supabase
+        .from('stock_by_branch')
+        .select('product_id, qty_available')
+        .in('product_id', productIds)
+        .gt('qty_available', 0); // Only positive stock interest us
+
+      // Map stock
+      const stockMap = new Map<number, number>();
+      if (stockData) {
+        for (const s of stockData) {
+          const current = stockMap.get(s.product_id) ?? 0;
+          stockMap.set(s.product_id, current + (s.qty_available ?? 0));
+        }
+      }
+
+      // Filter and enrich
+      for (const p of products) {
+        const totalStock = stockMap.get(p.id) ?? 0;
+        if (totalStock > 0) {
+          accumulated.push({ ...p, total_stock: totalStock });
+        }
+        if (accumulated.length >= limit) break;
+      }
+
+      offset += batchSize;
     }
 
-    // Deduplicate and enrich with total_stock, strip raw stock_by_branch join data
-    const seen = new Set<number>();
-    const enrichedUnique: any[] = [];
-
-    for (const p of (data ?? [])) {
-      if (seen.has(p.id)) continue;
-      seen.add(p.id);
-
-      const { stock_by_branch, ...rest } = p as any;
-      const stock = (Array.isArray(stock_by_branch) ? stock_by_branch : []) as any[];
-      const totalStock = stock.reduce((sum: number, s: any) => sum + (s.qty_available ?? 0), 0);
-
-      enrichedUnique.push({
-        ...rest,
-        total_stock: totalStock
-      });
-
-      if (enrichedUnique.length >= limit) break;
-    }
-
-    res.json({ data: enrichedUnique });
+    res.json({ data: accumulated });
   } catch (err) {
     logger.error({ err }, 'Featured products error');
     res.status(500).json({ error: 'Failed to fetch featured products' });
