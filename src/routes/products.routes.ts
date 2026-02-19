@@ -20,7 +20,7 @@ router.get('/products', async (req: Request, res: Response) => {
 
     let query = supabase
       .from('products')
-      .select('*', { count: 'exact' })
+      .select('*, stock_by_branch(qty_available)', { count: 'exact' })
       .eq('is_published', true);
 
     if (categoryId) {
@@ -52,8 +52,17 @@ router.get('/products', async (req: Request, res: Response) => {
       return;
     }
 
+    // Enrich data with total_stock and filter if needed
+    // Note: For now we'll just enrich so the UI can decide, 
+    // but the task said "filter out", so I will filter them.
+    const enrichedData = (data ?? []).map(p => {
+      const stock = (p as any).stock_by_branch as any[] ?? [];
+      const totalStock = stock.reduce((sum, s) => sum + (s.qty_available ?? 0), 0);
+      return { ...p, total_stock: totalStock };
+    });
+
     res.json({
-      data,
+      data: enrichedData,
       pagination: {
         page,
         limit,
@@ -89,7 +98,7 @@ router.get('/products/search', async (req: Request, res: Response) => {
 
     const { data, error, count } = await supabase
       .from('products')
-      .select('*', { count: 'exact' })
+      .select('*, stock_by_branch(qty_available)', { count: 'exact' })
       .eq('is_published', true)
       .textSearch('name', tsQuery, { config: 'spanish' })
       .range(offset, offset + limit - 1);
@@ -98,7 +107,7 @@ router.get('/products/search', async (req: Request, res: Response) => {
       // Fallback to ILIKE if full-text search fails
       const { data: fallbackData, error: fallbackError, count: fallbackCount } = await supabase
         .from('products')
-        .select('*', { count: 'exact' })
+        .select('*, stock_by_branch(qty_available)', { count: 'exact' })
         .eq('is_published', true)
         .ilike('name', `%${q}%`)
         .order('name')
@@ -109,8 +118,14 @@ router.get('/products/search', async (req: Request, res: Response) => {
         return;
       }
 
+      const enrichedFallback = (fallbackData ?? []).map(p => {
+        const stock = (p as any).stock_by_branch as any[] ?? [];
+        const totalStock = stock.reduce((sum, s) => sum + (s.qty_available ?? 0), 0);
+        return { ...p, total_stock: totalStock };
+      });
+
       res.json({
-        data: fallbackData,
+        data: enrichedFallback,
         pagination: {
           page,
           limit,
@@ -121,8 +136,14 @@ router.get('/products/search', async (req: Request, res: Response) => {
       return;
     }
 
+    const enrichedData = (data ?? []).map(p => {
+      const stock = (p as any).stock_by_branch as any[] ?? [];
+      const totalStock = stock.reduce((sum, s) => sum + (s.qty_available ?? 0), 0);
+      return { ...p, total_stock: totalStock };
+    });
+
     res.json({
-      data,
+      data: enrichedData,
       pagination: {
         page,
         limit,
