@@ -167,6 +167,7 @@ router.get('/products/featured', async (req: Request, res: Response) => {
     const limit = Math.min(30, Math.max(1, parseInt(req.query.limit as string) || 12));
 
     // Get products that have stock somewhere
+    // We fetch more than the limit because deduplication will reduce the count
     const { data, error } = await supabase
       .from('products')
       .select(`
@@ -176,34 +177,34 @@ router.get('/products/featured', async (req: Request, res: Response) => {
       .eq('is_published', true)
       .gt('stock_by_branch.qty_available', 0)
       .order('list_price', { ascending: true })
-      .limit(limit);
+      .limit(limit * 3); // Fetch buffer for deduplication
 
     if (error) {
-      // Fallback: just get published products
-      const { data: fallback, error: fbErr } = await supabase
-        .from('products')
-        .select('*')
-        .eq('is_published', true)
-        .order('synced_at', { ascending: false })
-        .limit(limit);
-
-      if (fbErr) {
-        res.status(500).json({ error: 'Failed to fetch featured products' });
-        return;
-      }
-      res.json({ data: fallback });
+      logger.error({ error }, 'Failed to fetch featured products');
+      res.status(500).json({ error: 'Failed to fetch featured products' });
       return;
     }
 
-    // Deduplicate (product may appear multiple times due to join)
+    // Deduplicate and enrich with total_stock
     const seen = new Set<number>();
-    const unique = data.filter(p => {
-      if (seen.has(p.id)) return false;
-      seen.add(p.id);
-      return true;
-    });
+    const enrichedUnique: any[] = [];
 
-    res.json({ data: unique });
+    for (const p of (data ?? [])) {
+      if (seen.has(p.id)) continue;
+      seen.add(p.id);
+
+      const stock = (p as any).stock_by_branch as any[] ?? [];
+      const totalStock = stock.reduce((sum, s) => sum + (s.qty_available ?? 0), 0);
+
+      enrichedUnique.push({
+        ...p,
+        total_stock: totalStock
+      });
+
+      if (enrichedUnique.length >= limit) break;
+    }
+
+    res.json({ data: enrichedUnique });
   } catch (err) {
     logger.error({ err }, 'Featured products error');
     res.status(500).json({ error: 'Failed to fetch featured products' });
