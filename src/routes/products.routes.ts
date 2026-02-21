@@ -24,7 +24,9 @@ router.get('/products', async (req: Request, res: Response) => {
       .eq('is_published', true);
 
     if (categoryId) {
-      query = query.eq('category_id', categoryId);
+      // Get all descendant category IDs for recursive filtering
+      const descendantIds = await getDescendantCategoryIds(categoryId);
+      query = query.in('category_id', [categoryId, ...descendantIds]);
     }
 
     // Sorting
@@ -274,7 +276,7 @@ router.get('/products/featured', async (req: Request, res: Response) => {
  */
 router.get('/products/:id', async (req: Request, res: Response) => {
   try {
-    const productId = parseInt(req.params.id);
+    const productId = parseInt(req.params.id as string);
     if (isNaN(productId)) {
       res.status(400).json({ error: 'Invalid product ID' });
       return;
@@ -293,17 +295,46 @@ router.get('/products/:id', async (req: Request, res: Response) => {
       return;
     }
 
-    // Fetch stock by branch with branch names
-    const { data: stock } = await supabase
+    // Fetch stock by branch
+    const { data: stockRaw, error: stockError } = await supabase
       .from('stock_by_branch')
-      .select('qty_available, branch:branches(id, name, code, city, is_pickup_enabled)')
+      .select('qty_available, branch_id')
       .eq('product_id', productId)
       .gt('qty_available', 0);
 
+    let stockData: any[] = [];
+    let totalStock = 0;
+
+    if (stockRaw && stockRaw.length > 0) {
+      // Collect branch IDs
+      const branchIds = stockRaw.map(s => s.branch_id);
+
+      // Fetch branches
+      const { data: branches } = await supabase
+        .from('branches')
+        .select('id, name, code, city, is_pickup_enabled')
+        .in('id', branchIds);
+
+      const branchMap = new Map<number, any>();
+      if (branches) {
+        for (const b of branches) {
+          branchMap.set(b.id, b);
+        }
+      }
+
+      // Merge
+      stockData = stockRaw.map(s => ({
+        qty_available: s.qty_available,
+        branch: branchMap.get(s.branch_id) || null,
+      })).filter(s => s.branch !== null); // Filter out if branch not found
+
+      totalStock = stockData.reduce((sum, s) => sum + (s.qty_available ?? 0), 0);
+    }
+
     res.json({
       ...product,
-      stock_by_branch: stock ?? [],
-      total_stock: stock?.reduce((sum, s) => sum + (s.qty_available ?? 0), 0) ?? 0,
+      stock_by_branch: stockData,
+      total_stock: totalStock,
     });
   } catch (err) {
     logger.error({ err }, 'Product detail error');
@@ -441,6 +472,39 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
     Math.sin(dLat / 2) ** 2 +
     Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 100) / 100;
+}
+
+/**
+ * Get all descendant category IDs for a given parent (recursive).
+ */
+async function getDescendantCategoryIds(parentId: number): Promise<number[]> {
+  const { data } = await supabase
+    .from('categories')
+    .select('id, parent_id');
+
+  if (!data) return [];
+
+  const childrenMap = new Map<number, number[]>();
+  for (const cat of data) {
+    if (cat.parent_id != null) {
+      const siblings = childrenMap.get(cat.parent_id) ?? [];
+      siblings.push(cat.id);
+      childrenMap.set(cat.parent_id, siblings);
+    }
+  }
+
+  const result: number[] = [];
+  const queue = [parentId];
+  while (queue.length > 0) {
+    const current = queue.pop()!;
+    const children = childrenMap.get(current) ?? [];
+    for (const childId of children) {
+      result.push(childId);
+      queue.push(childId);
+    }
+  }
+
+  return result;
 }
 
 export default router;
