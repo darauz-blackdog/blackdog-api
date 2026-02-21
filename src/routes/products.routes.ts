@@ -13,7 +13,7 @@ const router = Router();
 router.get('/products', async (req: Request, res: Response) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 40));
     const offset = (page - 1) * limit;
     const categoryId = req.query.category_id ? parseInt(req.query.category_id as string) : null;
     const sort = (req.query.sort as string) || 'name';
@@ -67,12 +67,13 @@ router.get('/products', async (req: Request, res: Response) => {
       return;
     }
 
-    // Manual join: Fetch stock for these products
+    // Manual join: Fetch stock for these products (only positive stock)
     const productIds = products.map(p => p.id);
     const { data: stockData } = await supabase
       .from('stock_by_branch')
       .select('product_id, qty_available')
-      .in('product_id', productIds);
+      .in('product_id', productIds)
+      .gt('qty_available', 0);
 
     // Map stock by product_id
     const stockMap = new Map<number, number>();
@@ -165,12 +166,13 @@ router.get('/products/search', async (req: Request, res: Response) => {
       return;
     }
 
-    // Manual join: Fetch stock for these products
+    // Manual join: Fetch stock for these products (only positive stock)
     const productIds = finalProducts.map(p => p.id);
     const { data: stockData } = await supabase
       .from('stock_by_branch')
       .select('product_id, qty_available')
-      .in('product_id', productIds);
+      .in('product_id', productIds)
+      .gt('qty_available', 0);
 
     // Map stock by product_id
     const stockMap = new Map<number, number>();
