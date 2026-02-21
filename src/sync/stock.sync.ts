@@ -78,16 +78,27 @@ export async function syncStock(): Promise<number> {
       synced_at: new Date().toISOString(),
     }));
 
-    // Upsert in batches
+    // Clear all existing stock and replace with fresh data from Odoo.
+    // This ensures products that went to 0 stock are properly reflected.
+    const { error: deleteError } = await supabase
+      .from('stock_by_branch')
+      .delete()
+      .gte('product_id', 0); // delete all rows
+
+    if (deleteError) {
+      logger.error({ deleteError }, 'Failed to clear stock_by_branch before sync');
+    }
+
+    // Insert fresh stock in batches
     let synced = 0;
     for (let i = 0; i < rows.length; i += 500) {
       const batch = rows.slice(i, i + 500);
       const { error } = await supabase
         .from('stock_by_branch')
-        .upsert(batch, { onConflict: 'product_id,branch_id' });
+        .insert(batch);
 
       if (error) {
-        logger.error({ error, batch: i }, 'Failed to upsert stock batch');
+        logger.error({ error, batch: i }, 'Failed to insert stock batch');
       } else {
         synced += batch.length;
       }
