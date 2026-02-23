@@ -6,6 +6,7 @@ import { syncCategories } from './categories.sync.js';
 import { syncStock } from './stock.sync.js';
 import { syncBranches } from './branches.sync.js';
 import { syncShopify } from './shopify.sync.js';
+import { syncCategoryMapping } from './category-mapping.sync.js';
 
 export function startSyncJobs() {
   logger.info('Starting sync jobs...');
@@ -54,6 +55,17 @@ export function startSyncJobs() {
     }
   });
 
+  // Category mapping: every hour (after categories + products sync)
+  cron.schedule(env.SYNC_CATEGORIES_INTERVAL, async () => {
+    logger.info('Running category mapping sync...');
+    try {
+      const count = await syncCategoryMapping();
+      logger.info({ count }, 'Category mapping sync completed');
+    } catch (err) {
+      logger.error({ err }, 'Category mapping sync failed');
+    }
+  });
+
   // Shopify enrichment: daily at 4am (images/descriptions don't change often)
   cron.schedule('0 4 * * *', async () => {
     logger.info('Running Shopify sync...');
@@ -76,6 +88,8 @@ async function runInitialSync() {
     await syncBranches();
     // Full product sync on startup (all 3800+ products from Odoo)
     await syncProductsFull();
+    // Map products to app categories and extract brands
+    await syncCategoryMapping();
     await syncStock();
     // Shopify enrichment (runs after products are in DB)
     await syncShopify();

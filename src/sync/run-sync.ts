@@ -3,6 +3,7 @@ import { syncProducts } from './products.sync.js';
 import { syncCategories } from './categories.sync.js';
 import { syncStock } from './stock.sync.js';
 import { syncBranches } from './branches.sync.js';
+import { syncCategoryMapping } from './category-mapping.sync.js';
 
 /**
  * Manual sync runner — use with: npm run sync
@@ -20,6 +21,9 @@ async function main() {
 
     const products = await syncProducts();
     logger.info({ count: products }, 'Products synced');
+
+    const categoryMapping = await syncCategoryMapping();
+    logger.info({ count: categoryMapping }, 'Category mapping synced');
 
     const stock = await syncStock();
     logger.info({ count: stock }, 'Stock synced');

@@ -6,9 +6,87 @@ import { logger } from '../config/logger.js';
 const router = Router();
 
 /**
+ * GET /api/app-categories
+ * Returns the 14 simplified app categories with product counts
+ */
+router.get('/app-categories', async (req: Request, res: Response) => {
+  try {
+    const { data: categories, error } = await supabase
+      .from('app_categories')
+      .select('*')
+      .order('sort_order', { ascending: true });
+
+    if (error) {
+      res.status(500).json({ error: 'Failed to fetch app categories' });
+      return;
+    }
+
+    // Get product counts per app_category using individual count queries (avoids 1000 row limit)
+    const countMap = new Map<number, number>();
+    const countPromises = (categories ?? []).map(async (c) => {
+      const { count } = await supabase
+        .from('products')
+        .select('id', { count: 'exact', head: true })
+        .eq('is_published', true)
+        .eq('app_category_id', c.id);
+      countMap.set(c.id, count ?? 0);
+    });
+    await Promise.all(countPromises);
+
+    const enriched = (categories ?? []).map(c => ({
+      ...c,
+      product_count: countMap.get(c.id) ?? 0,
+    }));
+
+    res.json({ data: enriched });
+  } catch (err) {
+    logger.error({ err }, 'App categories error');
+    res.status(500).json({ error: 'Failed to fetch app categories' });
+  }
+});
+
+/**
+ * GET /api/brands
+ * Returns distinct brands, optionally filtered by app_category_id
+ * Query params: app_category_id
+ */
+router.get('/brands', async (req: Request, res: Response) => {
+  try {
+    const appCategoryId = req.query.app_category_id
+      ? parseInt(req.query.app_category_id as string)
+      : null;
+
+    let query = supabase
+      .from('products')
+      .select('brand')
+      .eq('is_published', true)
+      .not('brand', 'is', null);
+
+    if (appCategoryId) {
+      query = query.eq('app_category_id', appCategoryId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      res.status(500).json({ error: 'Failed to fetch brands' });
+      return;
+    }
+
+    // Extract unique brands and sort
+    const brands = [...new Set((data ?? []).map(r => r.brand as string))].sort();
+
+    res.json({ data: brands });
+  } catch (err) {
+    logger.error({ err }, 'Brands error');
+    res.status(500).json({ error: 'Failed to fetch brands' });
+  }
+});
+
+/**
  * GET /api/products
  * Paginated product list with optional category filter
- * Query params: category_id, page (1-based), limit, sort (name, price_asc, price_desc)
+ * Query params: category_id, app_category_id, brand, page (1-based), limit, sort
  */
 router.get('/products', async (req: Request, res: Response) => {
   try {
@@ -16,6 +94,8 @@ router.get('/products', async (req: Request, res: Response) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 40));
     const offset = (page - 1) * limit;
     const categoryId = req.query.category_id ? parseInt(req.query.category_id as string) : null;
+    const appCategoryId = req.query.app_category_id ? parseInt(req.query.app_category_id as string) : null;
+    const brand = req.query.brand ? (req.query.brand as string) : null;
     const sort = (req.query.sort as string) || 'name';
 
     let query = supabase
@@ -23,10 +103,16 @@ router.get('/products', async (req: Request, res: Response) => {
       .select('*', { count: 'exact' })
       .eq('is_published', true);
 
-    if (categoryId) {
+    if (appCategoryId) {
+      query = query.eq('app_category_id', appCategoryId);
+    } else if (categoryId) {
       // Get all descendant category IDs for recursive filtering
       const descendantIds = await getDescendantCategoryIds(categoryId);
       query = query.in('category_id', [categoryId, ...descendantIds]);
+    }
+
+    if (brand) {
+      query = query.eq('brand', brand);
     }
 
     // Sorting

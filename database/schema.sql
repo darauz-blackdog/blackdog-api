@@ -3,6 +3,15 @@
 -- Run this in the Supabase SQL Editor
 -- ============================================
 
+-- App Categories (simplified categories for the mobile app)
+CREATE TABLE IF NOT EXISTS app_categories (
+  id serial PRIMARY KEY,
+  name text NOT NULL UNIQUE,
+  icon text NOT NULL,                       -- Material icon name
+  sort_order int DEFAULT 0,
+  created_at timestamptz DEFAULT now()
+);
+
 -- Products (cache from Odoo)
 CREATE TABLE IF NOT EXISTS products (
   id bigint PRIMARY KEY,                    -- Odoo product.template ID
@@ -11,6 +20,9 @@ CREATE TABLE IF NOT EXISTS products (
   sale_price numeric(10,2),                 -- Discounted price (null = no discount)
   category_id bigint,
   category_name text,
+  app_category_id int REFERENCES app_categories(id), -- Simplified app category
+  brand text,                               -- Brand extracted from Odoo category path
+  available_in_pos boolean DEFAULT false,    -- Available in Point of Sale
   product_type text,                        -- 'consu' or 'product'
   default_code text,                        -- SKU
   description text,
@@ -26,6 +38,9 @@ CREATE TABLE IF NOT EXISTS products (
 );
 
 CREATE INDEX idx_products_category ON products(category_id);
+CREATE INDEX idx_products_app_category ON products(app_category_id);
+CREATE INDEX idx_products_brand ON products(brand);
+CREATE INDEX idx_products_available_in_pos ON products(available_in_pos) WHERE available_in_pos = true;
 CREATE INDEX idx_products_published ON products(is_published) WHERE is_published = true;
 CREATE INDEX idx_products_name_search ON products USING gin(to_tsvector('spanish', name));
 CREATE INDEX idx_products_shopify_id ON products(shopify_id);
@@ -225,6 +240,9 @@ CREATE INDEX idx_sync_logs_job ON sync_logs(job_name, finished_at DESC);
 -- ============================================
 
 -- Public read access for products, categories, branches (cache data)
+ALTER TABLE app_categories ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "App categories are viewable by everyone" ON app_categories FOR SELECT USING (true);
+
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Products are viewable by everyone" ON products FOR SELECT USING (is_published = true);
 

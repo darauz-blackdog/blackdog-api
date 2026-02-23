@@ -14,12 +14,13 @@ interface OdooProduct {
   website_description: string | false;
   write_date: string;
   qty_available: number;
+  available_in_pos: boolean;
 }
 
 const ODOO_FIELDS = [
   'name', 'list_price', 'categ_id', 'type',
   'default_code', 'barcode', 'website_description', 'write_date',
-  'qty_available',
+  'qty_available', 'available_in_pos',
 ];
 
 const BASE_DOMAIN = [
@@ -38,6 +39,7 @@ function mapProduct(p: OdooProduct) {
     default_code: p.default_code || null,
     description: p.website_description || null,
     is_published: true,
+    available_in_pos: p.available_in_pos ?? false,
     odoo_updated_at: p.write_date,
     synced_at: new Date().toISOString(),
   };
