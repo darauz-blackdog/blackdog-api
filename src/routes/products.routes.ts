@@ -92,50 +92,110 @@ router.get('/products', async (req: Request, res: Response) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 40));
-    const offset = (page - 1) * limit;
     const categoryId = req.query.category_id ? parseInt(req.query.category_id as string) : null;
     const appCategoryId = req.query.app_category_id ? parseInt(req.query.app_category_id as string) : null;
     const brand = req.query.brand ? (req.query.brand as string) : null;
     const sort = (req.query.sort as string) || 'name';
 
-    let query = supabase
+    // Build base filter (reused for count + data queries)
+    const applyFilters = (q: any) => {
+      q = q.eq('is_published', true);
+      if (appCategoryId) {
+        q = q.eq('app_category_id', appCategoryId);
+      }
+      if (brand) {
+        q = q.eq('brand', brand);
+      }
+      return q;
+    };
+
+    // Handle category with descendants
+    let descendantIds: number[] = [];
+    if (!appCategoryId && categoryId) {
+      descendantIds = await getDescendantCategoryIds(categoryId);
+    }
+    const applyCategoryFilter = (q: any) => {
+      if (appCategoryId) return q;
+      if (categoryId) {
+        q = q.in('category_id', [categoryId, ...descendantIds]);
+      }
+      return q;
+    };
+
+    // --- Count deduplicated total ---
+    // Fetch all variant_group values + count of products without variant_group
+    let countQuery = supabase
       .from('products')
-      .select('*', { count: 'exact' })
+      .select('variant_group');
+    countQuery = applyFilters(countQuery);
+    countQuery = applyCategoryFilter(countQuery);
+    const { data: allRows } = await countQuery;
+
+    let deduplicatedTotal = 0;
+    if (allRows) {
+      const seenGroups = new Set<string>();
+      for (const row of allRows) {
+        if (!row.variant_group) {
+          deduplicatedTotal++;
+        } else if (!seenGroups.has(row.variant_group)) {
+          seenGroups.add(row.variant_group);
+          deduplicatedTotal++;
+        }
+      }
+    }
+
+    const totalPages = Math.ceil(deduplicatedTotal / limit);
+    const offset = (page - 1) * limit;
+
+    if (deduplicatedTotal === 0 || offset >= deduplicatedTotal) {
+      res.json({
+        data: [],
+        pagination: { page, limit, total: deduplicatedTotal, total_pages: totalPages },
+      });
+      return;
+    }
+
+    // --- Fetch products with overfetch to account for deduplication ---
+    // Overfetch 3x to ensure we get enough unique products after dedup
+    const fetchLimit = limit * 3;
+    const fetchOffset = Math.max(0, Math.floor(offset * 1.5)); // approximate start
+
+    let dataQuery = supabase
+      .from('products')
+      .select('*')
       .eq('is_published', true);
 
     if (appCategoryId) {
-      query = query.eq('app_category_id', appCategoryId);
+      dataQuery = dataQuery.eq('app_category_id', appCategoryId);
     } else if (categoryId) {
-      // Get all descendant category IDs for recursive filtering
-      const descendantIds = await getDescendantCategoryIds(categoryId);
-      query = query.in('category_id', [categoryId, ...descendantIds]);
+      dataQuery = dataQuery.in('category_id', [categoryId, ...descendantIds]);
     }
-
     if (brand) {
-      query = query.eq('brand', brand);
+      dataQuery = dataQuery.eq('brand', brand);
     }
 
-    // Always sort products with stock first
-    query = query.order('has_stock', { ascending: false });
-
-    // Secondary sort
+    // Sort
+    dataQuery = dataQuery.order('has_stock', { ascending: false });
     switch (sort) {
       case 'price_asc':
-        query = query.order('list_price', { ascending: true });
+        dataQuery = dataQuery.order('list_price', { ascending: true });
         break;
       case 'price_desc':
-        query = query.order('list_price', { ascending: false });
+        dataQuery = dataQuery.order('list_price', { ascending: false });
         break;
       case 'newest':
-        query = query.order('synced_at', { ascending: false });
+        dataQuery = dataQuery.order('synced_at', { ascending: false });
         break;
       default:
-        query = query.order('name', { ascending: true });
+        dataQuery = dataQuery.order('name', { ascending: true });
     }
 
-    query = query.range(offset, offset + limit - 1);
+    // For page 1 start from 0; for later pages we need to scan from start
+    // to correctly deduplicate (variant groups can span page boundaries)
+    const scanLimit = offset + fetchLimit;
+    dataQuery = dataQuery.range(0, scanLimit - 1);
 
-    const { data: products, error, count } = await query;
+    const { data: allProducts, error } = await dataQuery;
 
     if (error) {
       logger.error({ error }, 'Failed to fetch products');
@@ -143,28 +203,45 @@ router.get('/products', async (req: Request, res: Response) => {
       return;
     }
 
-    if (!products || products.length === 0) {
+    if (!allProducts || allProducts.length === 0) {
       res.json({
         data: [],
-        pagination: {
-          page,
-          limit,
-          total: count ?? 0,
-          total_pages: Math.ceil((count ?? 0) / limit),
-        },
+        pagination: { page, limit, total: deduplicatedTotal, total_pages: totalPages },
       });
       return;
     }
 
-    // Manual join: Fetch stock for these products (only positive stock)
-    const productIds = products.map(p => p.id);
+    // Deduplicate by variant_group
+    const seenGroups = new Set<string>();
+    const uniqueProducts: any[] = [];
+    for (const p of allProducts) {
+      if (!p.variant_group) {
+        uniqueProducts.push(p);
+      } else if (!seenGroups.has(p.variant_group)) {
+        seenGroups.add(p.variant_group);
+        uniqueProducts.push(p);
+      }
+    }
+
+    // Slice for the requested page
+    const pageProducts = uniqueProducts.slice(offset, offset + limit);
+
+    if (pageProducts.length === 0) {
+      res.json({
+        data: [],
+        pagination: { page, limit, total: deduplicatedTotal, total_pages: totalPages },
+      });
+      return;
+    }
+
+    // Fetch stock for page products
+    const productIds = pageProducts.map(p => p.id);
     const { data: stockData } = await supabase
       .from('stock_by_branch')
       .select('product_id, qty_available')
       .in('product_id', productIds)
       .gt('qty_available', 0);
 
-    // Map stock by product_id
     const stockMap = new Map<number, number>();
     if (stockData) {
       for (const s of stockData) {
@@ -173,8 +250,7 @@ router.get('/products', async (req: Request, res: Response) => {
       }
     }
 
-    // Enrich products
-    const enrichedData = products.map(p => ({
+    const enrichedData = pageProducts.map(p => ({
       ...p,
       total_stock: stockMap.get(p.id) ?? 0,
     }));
@@ -184,8 +260,8 @@ router.get('/products', async (req: Request, res: Response) => {
       pagination: {
         page,
         limit,
-        total: count ?? 0,
-        total_pages: Math.ceil((count ?? 0) / limit),
+        total: deduplicatedTotal,
+        total_pages: totalPages,
       },
     });
   } catch (err) {
@@ -214,58 +290,74 @@ router.get('/products/search', async (req: Request, res: Response) => {
     // Use full-text search with Spanish config
     const tsQuery = q.split(/\s+/).map(w => `${w}:*`).join(' & ');
 
-    const { data: products, error, count } = await supabase
+    // Fetch all matching results for dedup (search results are typically small)
+    const scanLimit = offset + limit * 3;
+
+    const { data: products, error } = await supabase
       .from('products')
-      .select('*', { count: 'exact' })
+      .select('*')
       .eq('is_published', true)
       .textSearch('name', tsQuery, { config: 'spanish' })
       .order('has_stock', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .range(0, scanLimit - 1);
 
     let finalProducts = products;
-    let finalCount = count;
 
     if (error) {
       // Fallback to ILIKE if full-text search fails
-      const { data: fallbackData, error: fallbackError, count: fallbackCount } = await supabase
+      const { data: fallbackData, error: fallbackError } = await supabase
         .from('products')
-        .select('*', { count: 'exact' })
+        .select('*')
         .eq('is_published', true)
         .ilike('name', `%${q}%`)
         .order('has_stock', { ascending: false })
         .order('name')
-        .range(offset, offset + limit - 1);
+        .range(0, scanLimit - 1);
 
       if (fallbackError) {
         res.status(500).json({ error: 'Search failed' });
         return;
       }
       finalProducts = fallbackData;
-      finalCount = fallbackCount;
     }
 
     if (!finalProducts || finalProducts.length === 0) {
       res.json({
         data: [],
-        pagination: {
-          page,
-          limit,
-          total: finalCount ?? 0,
-          total_pages: Math.ceil((finalCount ?? 0) / limit),
-        },
+        pagination: { page, limit, total: 0, total_pages: 0 },
       });
       return;
     }
 
-    // Manual join: Fetch stock for these products (only positive stock)
-    const productIds = finalProducts.map(p => p.id);
+    // Deduplicate by variant_group
+    const seenGroups = new Set<string>();
+    const uniqueProducts = finalProducts.filter(p => {
+      if (!p.variant_group) return true;
+      if (seenGroups.has(p.variant_group)) return false;
+      seenGroups.add(p.variant_group);
+      return true;
+    });
+
+    const deduplicatedTotal = uniqueProducts.length;
+    const totalPages = Math.ceil(deduplicatedTotal / limit);
+    const pageProducts = uniqueProducts.slice(offset, offset + limit);
+
+    if (pageProducts.length === 0) {
+      res.json({
+        data: [],
+        pagination: { page, limit, total: deduplicatedTotal, total_pages: totalPages },
+      });
+      return;
+    }
+
+    // Fetch stock for page products
+    const productIds = pageProducts.map(p => p.id);
     const { data: stockData } = await supabase
       .from('stock_by_branch')
       .select('product_id, qty_available')
       .in('product_id', productIds)
       .gt('qty_available', 0);
 
-    // Map stock by product_id
     const stockMap = new Map<number, number>();
     if (stockData) {
       for (const s of stockData) {
@@ -274,8 +366,7 @@ router.get('/products/search', async (req: Request, res: Response) => {
       }
     }
 
-    // Enrich products
-    const enrichedData = finalProducts.map(p => ({
+    const enrichedData = pageProducts.map(p => ({
       ...p,
       total_stock: stockMap.get(p.id) ?? 0,
     }));
@@ -285,8 +376,8 @@ router.get('/products/search', async (req: Request, res: Response) => {
       pagination: {
         page,
         limit,
-        total: finalCount ?? 0,
-        total_pages: Math.ceil((finalCount ?? 0) / limit),
+        total: deduplicatedTotal,
+        total_pages: totalPages,
       },
     });
   } catch (err) {
