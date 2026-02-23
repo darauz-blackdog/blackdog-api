@@ -296,6 +296,107 @@ router.get('/products/search', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/home/sections
+ * Returns curated home screen sections (by brand or category) with products
+ */
+router.get('/home/sections', async (req: Request, res: Response) => {
+  try {
+    const SECTION_SIZE = 8;
+    const sectionDefs: Array<{
+      id: string;
+      title: string;
+      type: 'brand' | 'category';
+      filter: Record<string, unknown>;
+    }> = [
+      { id: 'brand:Natural Greatness', title: 'Natural Greatness', type: 'brand', filter: { brand: 'Natural Greatness' } },
+      { id: 'category:3', title: 'Treats & Snacks', type: 'category', filter: { app_category_id: 3 } },
+      { id: "brand:BOSCO & ROXY'S", title: "Galletas Bosco & Roxy's", type: 'brand', filter: { brand: "BOSCO & ROXY'S" } },
+      { id: 'category:8', title: 'Bowls & Comederos', type: 'category', filter: { app_category_id: 8 } },
+      { id: 'brand:MPETS', title: 'M-PETS', type: 'brand', filter: { brand: 'MPETS' } },
+      { id: 'brand:Zenta Pets', title: 'Treats Naturales', type: 'brand', filter: { brand: 'Zenta Pets' } },
+      { id: 'category:4', title: 'Juguetes', type: 'category', filter: { app_category_id: 4 } },
+      { id: 'brand:Hills', title: 'Hills', type: 'brand', filter: { brand: 'Hills' } },
+    ];
+
+    // Fetch all sections in parallel
+    const sections = await Promise.all(
+      sectionDefs.map(async (def) => {
+        let query = supabase
+          .from('products')
+          .select('*')
+          .eq('is_published', true)
+          .eq('has_stock', true);
+
+        if (def.type === 'brand') {
+          query = query.eq('brand', def.filter.brand as string);
+        } else {
+          query = query.eq('app_category_id', def.filter.app_category_id as number);
+        }
+
+        // Get more than needed so we can deduplicate variants and shuffle
+        const { data: products, error } = await query
+          .order('synced_at', { ascending: false })
+          .limit(60);
+
+        if (error || !products || products.length === 0) {
+          return null;
+        }
+
+        // Deduplicate by variant_group: keep only one product per group
+        const seenGroups = new Set<string>();
+        const unique = products.filter(p => {
+          if (!p.variant_group) return true; // no group → always keep
+          if (seenGroups.has(p.variant_group)) return false;
+          seenGroups.add(p.variant_group);
+          return true;
+        });
+
+        // Shuffle and pick SECTION_SIZE
+        const shuffled = unique.sort(() => Math.random() - 0.5);
+        const selected = shuffled.slice(0, SECTION_SIZE);
+
+        // Fetch stock for selected products
+        const productIds = selected.map(p => p.id);
+        const { data: stockData } = await supabase
+          .from('stock_by_branch')
+          .select('product_id, qty_available')
+          .in('product_id', productIds)
+          .gt('qty_available', 0);
+
+        const stockMap = new Map<number, number>();
+        if (stockData) {
+          for (const s of stockData) {
+            const current = stockMap.get(s.product_id) ?? 0;
+            stockMap.set(s.product_id, current + (s.qty_available ?? 0));
+          }
+        }
+
+        const enriched = selected.map(p => ({
+          ...p,
+          total_stock: stockMap.get(p.id) ?? 0,
+        }));
+
+        return {
+          id: def.id,
+          title: def.title,
+          type: def.type,
+          filter: def.filter,
+          products: enriched,
+        };
+      })
+    );
+
+    // Filter out empty sections
+    const validSections = sections.filter(s => s !== null);
+
+    res.json({ sections: validSections });
+  } catch (err) {
+    logger.error({ err }, 'Home sections error');
+    res.status(500).json({ error: 'Failed to fetch home sections' });
+  }
+});
+
+/**
  * GET /api/products/featured
  * Returns featured/popular products (cheapest with stock for now)
  * Query params: limit
