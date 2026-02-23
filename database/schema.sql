@@ -34,7 +34,12 @@ CREATE TABLE IF NOT EXISTS products (
   handle text,                             -- Shopify URL handle
   is_published boolean DEFAULT true,
   odoo_updated_at timestamptz,
-  synced_at timestamptz DEFAULT now()
+  synced_at timestamptz DEFAULT now(),
+  total_stock numeric(10,2) DEFAULT 0,
+  has_stock boolean GENERATED ALWAYS AS (total_stock > 0) STORED,
+  variant_group text,
+  variant_label text,
+  sort_weight_grams numeric
 );
 
 CREATE INDEX idx_products_category ON products(category_id);
@@ -45,6 +50,8 @@ CREATE INDEX idx_products_published ON products(is_published) WHERE is_published
 CREATE INDEX idx_products_name_search ON products USING gin(to_tsvector('spanish', name));
 CREATE INDEX idx_products_shopify_id ON products(shopify_id);
 CREATE INDEX idx_products_handle ON products(handle);
+CREATE INDEX idx_products_has_stock ON products(has_stock DESC, name);
+CREATE INDEX idx_products_variant_group ON products(variant_group) WHERE variant_group IS NOT NULL;
 
 -- Categories (cache from Odoo)
 CREATE TABLE IF NOT EXISTS categories (

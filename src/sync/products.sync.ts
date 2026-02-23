@@ -38,7 +38,6 @@ function mapProduct(p: OdooProduct) {
     product_type: p.type,
     default_code: p.default_code || null,
     description: p.website_description || null,
-    is_published: true,
     available_in_pos: p.available_in_pos ?? false,
     odoo_updated_at: p.write_date,
     synced_at: new Date().toISOString(),

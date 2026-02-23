@@ -115,7 +115,10 @@ router.get('/products', async (req: Request, res: Response) => {
       query = query.eq('brand', brand);
     }
 
-    // Sorting
+    // Always sort products with stock first
+    query = query.order('has_stock', { ascending: false });
+
+    // Secondary sort
     switch (sort) {
       case 'price_asc':
         query = query.order('list_price', { ascending: true });
@@ -216,6 +219,7 @@ router.get('/products/search', async (req: Request, res: Response) => {
       .select('*', { count: 'exact' })
       .eq('is_published', true)
       .textSearch('name', tsQuery, { config: 'spanish' })
+      .order('has_stock', { ascending: false })
       .range(offset, offset + limit - 1);
 
     let finalProducts = products;
@@ -228,6 +232,7 @@ router.get('/products/search', async (req: Request, res: Response) => {
         .select('*', { count: 'exact' })
         .eq('is_published', true)
         .ilike('name', `%${q}%`)
+        .order('has_stock', { ascending: false })
         .order('name')
         .range(offset, offset + limit - 1);
 
@@ -419,10 +424,33 @@ router.get('/products/:id', async (req: Request, res: Response) => {
       totalStock = stockData.reduce((sum, s) => sum + (s.qty_available ?? 0), 0);
     }
 
+    // Fetch variant siblings if this product belongs to a variant group
+    let variants: any[] = [];
+    if (product.variant_group) {
+      const { data: siblings } = await supabase
+        .from('products')
+        .select('id, variant_label, list_price, sale_price, total_stock, image_url, sort_weight_grams')
+        .eq('variant_group', product.variant_group)
+        .eq('is_published', true)
+        .order('sort_weight_grams', { ascending: true });
+
+      if (siblings && siblings.length > 1) {
+        variants = siblings.map(s => ({
+          id: s.id,
+          variant_label: s.variant_label,
+          list_price: s.list_price,
+          sale_price: s.sale_price,
+          total_stock: s.total_stock,
+          image_url: s.image_url,
+        }));
+      }
+    }
+
     res.json({
       ...product,
       stock_by_branch: stockData,
       total_stock: totalStock,
+      variants,
     });
   } catch (err) {
     logger.error({ err }, 'Product detail error');
