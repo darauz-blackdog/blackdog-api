@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { supabase } from '../config/supabase.js';
-import { create, searchRead, execute_kw } from '../config/odoo.js';
+import { create, searchRead, execute_kw, write } from '../config/odoo.js';
 import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
 import { createPaymentLink } from '../services/tilopay.service.js';
@@ -13,6 +13,60 @@ const router = Router();
 router.use('/orders', requireAuth);
 
 const DELIVERY_FEE_DEFAULT = 3.50;
+
+// ── Cached Odoo IDs for BlackDog App module ──
+let cachedUtmSourceId: number | null = null;
+let cachedTeamId: number | null = null;
+
+async function getAppUtmSourceId(): Promise<number | false> {
+  if (cachedUtmSourceId) return cachedUtmSourceId;
+  try {
+    const sources = await searchRead<{ id: number }>(
+      'utm.source',
+      [['name', '=', 'BlackDog App']],
+      ['id'],
+      { limit: 1 }
+    );
+    cachedUtmSourceId = sources[0]?.id ?? null;
+    return cachedUtmSourceId ?? false;
+  } catch {
+    return false;
+  }
+}
+
+async function getAppTeamId(): Promise<number | false> {
+  if (cachedTeamId) return cachedTeamId;
+  try {
+    const teams = await searchRead<{ id: number }>(
+      'crm.team',
+      [['name', '=', 'App Móvil']],
+      ['id'],
+      { limit: 1 }
+    );
+    cachedTeamId = teams[0]?.id ?? null;
+    return cachedTeamId ?? false;
+  } catch {
+    return false;
+  }
+}
+
+// Map backend payment_method → Odoo app_payment_method selection
+const PAYMENT_METHOD_MAP: Record<string, string> = {
+  tilopay: 'tilopay',
+  yappy: 'yappy',
+  in_store: 'cash',
+};
+
+// Map backend status → Odoo app_fulfillment_state
+const FULFILLMENT_STATE_MAP: Record<string, string> = {
+  pending_payment: 'awaiting_payment',
+  confirmed: 'confirmed',
+  preparing: 'preparing',
+  ready_pickup: 'ready_pickup',
+  shipping: 'shipping',
+  delivered: 'delivered',
+  cancelled: 'cancelled',
+};
 
 /**
  * POST /api/orders
@@ -93,10 +147,10 @@ router.post('/orders', async (req: Request, res: Response) => {
     const deliveryFee = delivery_type === 'delivery' ? DELIVERY_FEE_DEFAULT : 0;
     const total = Math.round((subtotal + deliveryFee) * 100) / 100;
 
-    // 4. Get customer's Odoo partner ID
+    // 4. Get customer's Odoo partner ID + phone
     const { data: profile } = await supabase
       .from('customer_profiles')
-      .select('odoo_partner_id')
+      .select('odoo_partner_id, full_name, phone')
       .eq('id', userId)
       .single();
 
@@ -136,12 +190,33 @@ router.post('/orders', async (req: Request, res: Response) => {
         }).filter(line => (line[2] as any).product_id !== false);
 
         if (orderLines.length > 0) {
-          odooOrderId = await create('sale.order', {
+          // Resolve UTM source + sales team for app orders
+          const [sourceId, teamId] = await Promise.all([
+            getAppUtmSourceId(),
+            getAppTeamId(),
+          ]);
+
+          const initialFulfillment = payment_method === 'in_store'
+            ? 'confirmed'
+            : 'awaiting_payment';
+
+          const odooValues: Record<string, unknown> = {
             partner_id: profile.odoo_partner_id,
             order_line: orderLines,
-            note: `BlackDog App - ${delivery_type} - ${payment_method}${notes ? '\n' + notes : ''}`,
+            note: notes ?? '',
             warehouse_id: branch_id,
-          });
+            // ── blackdog_app_sales fields ──
+            app_delivery_method: delivery_type,
+            app_payment_method: PAYMENT_METHOD_MAP[payment_method] ?? payment_method,
+            app_customer_phone: profile.phone ?? '',
+            app_delivery_notes: notes ?? '',
+            app_fulfillment_state: initialFulfillment,
+          };
+
+          if (sourceId) odooValues.source_id = sourceId;
+          if (teamId) odooValues.team_id = teamId;
+
+          odooOrderId = await create('sale.order', odooValues);
 
           // Get the order name (S00XXX)
           if (odooOrderId) {
@@ -191,6 +266,17 @@ router.post('/orders', async (req: Request, res: Response) => {
       return;
     }
 
+    // 6b. Update Odoo order with Supabase order ref
+    if (odooOrderId) {
+      try {
+        await write('sale.order', [odooOrderId], {
+          app_order_ref: order.id,
+        });
+      } catch (refErr) {
+        logger.warn({ err: refErr }, 'Failed to set app_order_ref on Odoo order (non-blocking)');
+      }
+    }
+
     // 7. Copy cart items to order_items
     const orderItems = items.map(item => ({
       order_id: order.id,
@@ -225,22 +311,15 @@ router.post('/orders', async (req: Request, res: Response) => {
     // Generate payment link for Tilopay
     if (payment_method === 'tilopay') {
       try {
-        // Get customer info for payment link
-        const { data: custProfile } = await supabase
-          .from('customer_profiles')
-          .select('full_name, phone')
-          .eq('id', userId)
-          .single();
-
         const customerEmail = (req as AuthenticatedRequest).user.email;
-        const customerName = custProfile?.full_name ?? 'Cliente';
+        const customerName = profile?.full_name ?? 'Cliente';
 
         const paymentResult = await createPaymentLink({
           orderNumber,
           amount: total,
           customerName,
           customerEmail,
-          customerPhone: custProfile?.phone ?? '',
+          customerPhone: profile?.phone ?? '',
         });
 
         response.payment_url = paymentResult.payment_link;
@@ -402,6 +481,9 @@ router.post('/orders/:id/cancel', async (req: Request, res: Response) => {
     // Cancel in Odoo if exists
     if (order.odoo_order_id) {
       try {
+        await write('sale.order', [order.odoo_order_id], {
+          app_fulfillment_state: 'cancelled',
+        });
         await execute_kw('sale.order', 'action_cancel', [[order.odoo_order_id]]);
         logger.info({ odooOrderId: order.odoo_order_id }, 'Cancelled Odoo sale.order');
       } catch (odooErr) {
@@ -455,7 +537,7 @@ router.post('/admin/orders/:id/status', async (req: Request, res: Response) => {
     // Get current order (use service role supabase — no RLS)
     const { data: order } = await supabase
       .from('orders')
-      .select('id, user_id, status, odoo_order_name')
+      .select('id, user_id, status, odoo_order_id, odoo_order_name')
       .eq('id', orderId)
       .single();
 
@@ -500,6 +582,21 @@ router.post('/admin/orders/:id/status', async (req: Request, res: Response) => {
 
     // Send push notification to the customer
     notifyOrderStatusChange(order.user_id, orderId, newStatus, message).catch(() => {});
+
+    // Sync fulfillment state to Odoo
+    if (order.odoo_order_id) {
+      const odooState = FULFILLMENT_STATE_MAP[newStatus];
+      if (odooState) {
+        try {
+          await write('sale.order', [order.odoo_order_id], {
+            app_fulfillment_state: odooState,
+          });
+          logger.info({ odooOrderId: order.odoo_order_id, odooState }, 'Synced fulfillment state to Odoo');
+        } catch (odooErr) {
+          logger.warn({ err: odooErr }, 'Failed to sync fulfillment state to Odoo (non-blocking)');
+        }
+      }
+    }
 
     logger.info({ orderId, oldStatus: order.status, newStatus }, 'Order status updated (admin)');
 
