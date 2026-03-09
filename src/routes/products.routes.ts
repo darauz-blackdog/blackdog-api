@@ -387,31 +387,63 @@ router.get('/products/search', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/home/banners
+ * Returns active banners for the home carousel
+ */
+router.get('/home/banners', async (req: Request, res: Response) => {
+  try {
+    const now = new Date().toISOString();
+    const { data: banners, error } = await supabase
+      .from('home_banners')
+      .select('*')
+      .eq('is_active', true)
+      .or(`starts_at.is.null,starts_at.lte.${now}`)
+      .or(`ends_at.is.null,ends_at.gte.${now}`)
+      .order('sort_order', { ascending: true });
+
+    if (error) {
+      logger.error({ error }, 'Home banners error');
+      res.status(500).json({ error: 'Failed to fetch banners' });
+      return;
+    }
+
+    res.json({ banners: banners ?? [] });
+  } catch (err) {
+    logger.error({ err }, 'Home banners error');
+    res.status(500).json({ error: 'Failed to fetch banners' });
+  }
+});
+
+/**
  * GET /api/home/sections
- * Returns curated home screen sections (by brand or category) with products
+ * Returns curated home screen sections (by brand or category) with products.
+ * Reads section definitions from home_sections table.
  */
 router.get('/home/sections', async (req: Request, res: Response) => {
   try {
-    const SECTION_SIZE = 8;
-    const sectionDefs: Array<{
-      id: string;
-      title: string;
-      type: 'brand' | 'category';
-      filter: Record<string, unknown>;
-    }> = [
-      { id: 'brand:Natural Greatness', title: 'Natural Greatness', type: 'brand', filter: { brand: 'Natural Greatness' } },
-      { id: 'category:3', title: 'Treats & Snacks', type: 'category', filter: { app_category_id: 3 } },
-      { id: "brand:BOSCO & ROXY'S", title: "Galletas Bosco & Roxy's", type: 'brand', filter: { brand: "BOSCO & ROXY'S" } },
-      { id: 'category:8', title: 'Bowls & Comederos', type: 'category', filter: { app_category_id: 8 } },
-      { id: 'brand:MPETS', title: 'M-PETS', type: 'brand', filter: { brand: 'MPETS' } },
-      { id: 'brand:Zenta Pets', title: 'Treats Naturales', type: 'brand', filter: { brand: 'Zenta Pets' } },
-      { id: 'category:4', title: 'Juguetes', type: 'category', filter: { app_category_id: 4 } },
-      { id: 'brand:Hills', title: 'Hills', type: 'brand', filter: { brand: 'Hills' } },
-    ];
+    // Fetch active section definitions from DB
+    const { data: sectionDefs, error: defError } = await supabase
+      .from('home_sections')
+      .select('*')
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true });
+
+    if (defError) {
+      logger.error({ error: defError }, 'Failed to fetch home_sections config');
+      res.status(500).json({ error: 'Failed to fetch home sections' });
+      return;
+    }
+
+    if (!sectionDefs || sectionDefs.length === 0) {
+      res.json({ sections: [] });
+      return;
+    }
 
     // Fetch all sections in parallel
     const sections = await Promise.all(
       sectionDefs.map(async (def) => {
+        const SECTION_SIZE = def.max_products ?? 8;
+
         let query = supabase
           .from('products')
           .select('*')
@@ -419,9 +451,9 @@ router.get('/home/sections', async (req: Request, res: Response) => {
           .eq('has_stock', true);
 
         if (def.type === 'brand') {
-          query = query.eq('brand', def.filter.brand as string);
+          query = query.eq('brand', def.filter_value);
         } else {
-          query = query.eq('app_category_id', def.filter.app_category_id as number);
+          query = query.eq('app_category_id', parseInt(def.filter_value));
         }
 
         // Get more than needed so we can deduplicate variants and shuffle
@@ -467,11 +499,15 @@ router.get('/home/sections', async (req: Request, res: Response) => {
           total_stock: stockMap.get(p.id) ?? 0,
         }));
 
+        const filter = def.type === 'brand'
+          ? { brand: def.filter_value }
+          : { app_category_id: parseInt(def.filter_value) };
+
         return {
-          id: def.id,
+          id: `${def.type}:${def.filter_value}`,
           title: def.title,
           type: def.type,
-          filter: def.filter,
+          filter,
           products: enriched,
         };
       })

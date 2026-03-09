@@ -12,7 +12,10 @@ const router = Router();
 
 router.use('/orders', requireAuth);
 
-const DELIVERY_FEE_DEFAULT = 3.50;
+// Delivery fee removed — ASAP handles delivery and charges the customer directly.
+// TODO: In the future, consider accepting delivery_type: 'asap' or a delivery_provider
+// field to distinguish ASAP orders from legacy ones.
+const DELIVERY_FEE_DEFAULT = 0;
 
 // ── Cached Odoo IDs for BlackDog App module ──
 let cachedUtmSourceId: number | null = null;
