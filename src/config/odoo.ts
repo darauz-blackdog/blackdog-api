@@ -5,6 +5,10 @@ import { logger } from './logger.js';
 const url = new URL(env.ODOO_URL);
 const isSecure = url.protocol === 'https:';
 
+const RPC_TIMEOUT = 30_000; // 30s per call
+const MAX_RETRIES = 2;      // retry up to 2 times (3 attempts total)
+const RETRY_DELAY = 1_000;  // 1s between retries
+
 function createClient(path: string) {
   const options = {
     host: url.hostname,
@@ -21,52 +25,83 @@ const objectClient = createClient('/xmlrpc/2/object');
 
 let uid: number | null = null;
 
+function callWithTimeout<T>(
+  client: xmlrpc.Client,
+  method: string,
+  params: unknown[],
+  timeout: number
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Odoo RPC timeout after ${timeout}ms`));
+    }, timeout);
+
+    client.methodCall(method, params, (error, value) => {
+      clearTimeout(timer);
+      if (error) return reject(error);
+      resolve(value as T);
+    });
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
+}
+
 /** Authenticate and get the user ID */
 export async function authenticate(): Promise<number> {
   if (uid) return uid;
 
-  return new Promise((resolve, reject) => {
-    commonClient.methodCall(
-      'authenticate',
-      [env.ODOO_DB, env.ODOO_USERNAME, env.ODOO_PASSWORD, {}],
-      (error, value) => {
-        if (error) {
-          logger.error({ error }, 'Odoo authentication failed');
-          return reject(error);
-        }
-        if (!value || value === false) {
-          return reject(new Error('Odoo authentication returned false — check credentials'));
-        }
-        uid = value as number;
-        logger.info({ uid }, 'Authenticated with Odoo');
-        resolve(uid);
-      }
-    );
-  });
+  const value = await callWithTimeout<number | false>(
+    commonClient,
+    'authenticate',
+    [env.ODOO_DB, env.ODOO_USERNAME, env.ODOO_PASSWORD, {}],
+    RPC_TIMEOUT
+  );
+
+  if (!value) {
+    throw new Error('Odoo authentication returned false — check credentials');
+  }
+
+  uid = value;
+  logger.info({ uid }, 'Authenticated with Odoo');
+  return uid;
 }
 
-/** Execute a method on an Odoo model */
+/** Execute a method on an Odoo model with retry */
 export async function execute_kw<T = unknown>(
   model: string,
   method: string,
   args: unknown[],
   kwargs: Record<string, unknown> = {}
 ): Promise<T> {
-  const userId = await authenticate();
+  let lastError: unknown;
 
-  return new Promise((resolve, reject) => {
-    objectClient.methodCall(
-      'execute_kw',
-      [env.ODOO_DB, userId, env.ODOO_PASSWORD, model, method, args, kwargs],
-      (error, value) => {
-        if (error) {
-          logger.error({ error, model, method }, 'Odoo execute_kw failed');
-          return reject(error);
-        }
-        resolve(value as T);
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const userId = await authenticate();
+      const result = await callWithTimeout<T>(
+        objectClient,
+        'execute_kw',
+        [env.ODOO_DB, userId, env.ODOO_PASSWORD, model, method, args, kwargs],
+        RPC_TIMEOUT
+      );
+      return result;
+    } catch (error: any) {
+      lastError = error;
+      // Reset uid on auth-related errors so next attempt re-authenticates
+      if (error?.message?.includes('auth') || error?.faultCode === 2) {
+        uid = null;
       }
-    );
-  });
+      if (attempt < MAX_RETRIES) {
+        logger.warn({ error: error?.message, model, method, attempt: attempt + 1 }, 'Odoo RPC failed, retrying...');
+        await sleep(RETRY_DELAY * (attempt + 1));
+      }
+    }
+  }
+
+  logger.error({ error: lastError, model, method }, 'Odoo execute_kw failed after retries');
+  throw lastError;
 }
 
 /** Convenience: search_read */

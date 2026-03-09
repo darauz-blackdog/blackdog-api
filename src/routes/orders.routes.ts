@@ -7,6 +7,7 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
 import { createPaymentLink } from '../services/tilopay.service.js';
 import { getPaymentInstructions } from '../services/yappy.service.js';
 import { notifyOrderStatusChange } from '../services/push.service.js';
+import { resolveVariantIds, checkStockRealtime, confirmSaleOrder, cancelSaleOrder } from '../services/odoo-order.service.js';
 
 const router = Router();
 
@@ -122,23 +123,55 @@ router.post('/orders', async (req: Request, res: Response) => {
       return;
     }
 
-    // 2. Validate stock for each item at the selected branch
-    for (const item of items) {
-      const { data: stock } = await supabase
-        .from('stock_by_branch')
-        .select('qty_available')
-        .eq('product_id', item.product_id)
-        .eq('branch_id', branch_id)
-        .single();
+    // 2. Resolve variant IDs + validate stock (Odoo real-time → Supabase fallback)
+    const templateIds = items.map(i => i.product_id);
+    let variantMap = new Map<number, number>();
+    let stockSource: 'odoo' | 'supabase' = 'supabase';
 
-      if (!stock || stock.qty_available < item.quantity) {
+    try {
+      variantMap = await resolveVariantIds(templateIds);
+
+      const stockCheck = await checkStockRealtime(
+        items.map(i => ({ product_id: i.product_id, quantity: i.quantity, product_name: i.product_name })),
+        branch_id,
+        variantMap
+      );
+
+      if (!stockCheck.ok) {
+        const first = stockCheck.issues[0];
         res.status(400).json({
-          error: `Insufficient stock for "${item.product_name}" at selected branch`,
-          product_id: item.product_id,
-          requested: item.quantity,
-          available: stock?.qty_available ?? 0,
+          error: `Insufficient stock for "${first.product_name}" at selected branch`,
+          product_id: first.product_id,
+          requested: first.requested,
+          available: first.available,
+          issues: stockCheck.issues,
         });
         return;
+      }
+
+      stockSource = 'odoo';
+      logger.info({ branch_id, itemCount: items.length }, 'Stock validated via Odoo real-time');
+    } catch (odooStockErr) {
+      logger.warn({ err: odooStockErr }, 'Odoo stock check failed, falling back to Supabase');
+
+      // Fallback: Supabase stock check
+      for (const item of items) {
+        const { data: stock } = await supabase
+          .from('stock_by_branch')
+          .select('qty_available')
+          .eq('product_id', item.product_id)
+          .eq('branch_id', branch_id)
+          .single();
+
+        if (!stock || stock.qty_available < item.quantity) {
+          res.status(400).json({
+            error: `Insufficient stock for "${item.product_name}" at selected branch`,
+            product_id: item.product_id,
+            requested: item.quantity,
+            available: stock?.qty_available ?? 0,
+          });
+          return;
+        }
       }
     }
 
@@ -163,27 +196,14 @@ router.post('/orders', async (req: Request, res: Response) => {
 
     if (profile?.odoo_partner_id) {
       try {
-        // Get product.product IDs (variants) from product.template IDs
-        const templateIds = items.map(i => i.product_id);
-        const variants = await searchRead<{ id: number; product_tmpl_id: [number, string] }>(
-          'product.product',
-          [['product_tmpl_id', 'in', templateIds]],
-          ['id', 'product_tmpl_id'],
-          { limit: templateIds.length * 2 }
-        );
-
-        // Map template ID → first variant ID
-        const templateToVariant = new Map<number, number>();
-        for (const v of variants) {
-          const tmplId = v.product_tmpl_id[0];
-          if (!templateToVariant.has(tmplId)) {
-            templateToVariant.set(tmplId, v.id);
-          }
+        // Resolve variants if not done during stock check
+        if (variantMap.size === 0) {
+          variantMap = await resolveVariantIds(templateIds);
         }
 
         // Build order lines
         const orderLines = items.map(item => {
-          const variantId = templateToVariant.get(item.product_id);
+          const variantId = variantMap.get(item.product_id);
           return [0, 0, {
             product_id: variantId ?? false,
             product_uom_qty: item.quantity,
@@ -232,7 +252,16 @@ router.post('/orders', async (req: Request, res: Response) => {
             odooOrderName = orders[0]?.name ?? null;
           }
 
-          logger.info({ odooOrderId, odooOrderName }, 'Created Odoo sale.order');
+          // Confirm immediately for in_store orders (triggers stock.picking)
+          if (odooOrderId && payment_method === 'in_store') {
+            try {
+              await confirmSaleOrder(odooOrderId);
+            } catch (confirmErr) {
+              logger.warn({ err: confirmErr, odooOrderId }, 'Failed to confirm Odoo order for in_store (non-blocking)');
+            }
+          }
+
+          logger.info({ odooOrderId, odooOrderName, stockSource }, 'Created Odoo sale.order');
         }
       } catch (odooErr) {
         logger.warn({ err: odooErr }, 'Failed to create Odoo sale.order (non-blocking)');
@@ -484,11 +513,7 @@ router.post('/orders/:id/cancel', async (req: Request, res: Response) => {
     // Cancel in Odoo if exists
     if (order.odoo_order_id) {
       try {
-        await write('sale.order', [order.odoo_order_id], {
-          app_fulfillment_state: 'cancelled',
-        });
-        await execute_kw('sale.order', 'action_cancel', [[order.odoo_order_id]]);
-        logger.info({ odooOrderId: order.odoo_order_id }, 'Cancelled Odoo sale.order');
+        await cancelSaleOrder(order.odoo_order_id);
       } catch (odooErr) {
         logger.warn({ err: odooErr }, 'Failed to cancel Odoo order (non-blocking)');
       }

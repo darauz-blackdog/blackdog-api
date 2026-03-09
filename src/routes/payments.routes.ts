@@ -1,12 +1,30 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { supabase } from '../config/supabase.js';
+import { write } from '../config/odoo.js';
 import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
 import { createPaymentLink, getPaymentStatus } from '../services/tilopay.service.js';
 import { isYappyConfigured, findMatchingPayment, getPaymentInstructions } from '../services/yappy.service.js';
+import { confirmSaleOrder } from '../services/odoo-order.service.js';
 
 const router = Router();
+
+/** Sync payment confirmation to Odoo: update fields + confirm the sale.order (best-effort, non-blocking) */
+function syncPaymentToOdoo(odooOrderId: number | null | undefined) {
+  if (!odooOrderId) return;
+  (async () => {
+    try {
+      await write('sale.order', [odooOrderId], {
+        app_fulfillment_state: 'confirmed',
+        app_payment_status: 'paid',
+      });
+      await confirmSaleOrder(odooOrderId);
+    } catch (err) {
+      logger.warn({ err: (err as any)?.message, odooOrderId }, 'Failed to sync payment/confirm to Odoo (non-blocking)');
+    }
+  })();
+}
 
 /**
  * POST /api/payments/tilopay/create-link
@@ -78,6 +96,11 @@ router.post('/payments/tilopay/create-link', requireAuth, async (req: Request, r
       })
       .eq('id', order_id);
 
+    // Store payment link in Odoo
+    if (order.odoo_order_id) {
+      write('sale.order', [order.odoo_order_id], { app_payment_link: result.payment_link }).catch(() => {});
+    }
+
     // Add tracking entry
     await supabase.from('order_tracking').insert({
       order_id,
@@ -113,18 +136,18 @@ router.get('/payments/tilopay/return', async (req: Request, res: Response) => {
 
     // Find the order by payment_reference (which is the orderNumber we sent)
     let orderId: string | null = null;
+    let odooOrderId: number | null = null;
 
     // Try returnData first (base64 encoded orderNumber)
     if (returnData) {
       try {
         const decoded = Buffer.from(String(returnData), 'base64').toString();
-        // decoded could be the orderNumber — find order by it
         const { data } = await supabase
           .from('orders')
-          .select('id')
+          .select('id, odoo_order_id')
           .eq('payment_reference', decoded)
           .single();
-        if (data) orderId = data.id;
+        if (data) { orderId = data.id; odooOrderId = data.odoo_order_id; }
       } catch { /* ignore */ }
     }
 
@@ -132,20 +155,20 @@ router.get('/payments/tilopay/return', async (req: Request, res: Response) => {
     if (!orderId && orderNumber) {
       const { data } = await supabase
         .from('orders')
-        .select('id')
+        .select('id, odoo_order_id')
         .eq('payment_reference', String(orderNumber))
         .single();
-      if (data) orderId = data.id;
+      if (data) { orderId = data.id; odooOrderId = data.odoo_order_id; }
     }
 
     // Fallback: search by odoo_order_name
     if (!orderId && orderNumber) {
       const { data } = await supabase
         .from('orders')
-        .select('id')
+        .select('id, odoo_order_id')
         .eq('odoo_order_name', String(orderNumber))
         .single();
-      if (data) orderId = data.id;
+      if (data) { orderId = data.id; odooOrderId = data.odoo_order_id; }
     }
 
     if (orderId) {
@@ -165,6 +188,8 @@ router.get('/payments/tilopay/return', async (req: Request, res: Response) => {
           status: 'confirmed',
           message: `Pago aprobado via Tilopay (auth: ${String(req.query.auth ?? 'N/A')})`,
         });
+
+        syncPaymentToOdoo(odooOrderId);
 
         logger.info({ orderId, tpt }, 'Tilopay payment approved');
       } else {
@@ -235,7 +260,7 @@ router.post('/payments/tilopay/webhook', async (req: Request, res: Response) => 
     // Find the order
     const { data: order } = await supabase
       .from('orders')
-      .select('id, status, payment_status')
+      .select('id, status, payment_status, odoo_order_id')
       .or(`payment_reference.eq.${orderNumber},odoo_order_name.eq.${orderNumber}`)
       .single();
 
@@ -269,6 +294,8 @@ router.post('/payments/tilopay/webhook', async (req: Request, res: Response) => 
         status: 'confirmed',
         message: 'Pago confirmado via webhook Tilopay',
       });
+
+      syncPaymentToOdoo(order.odoo_order_id);
     }
 
     res.json({ status: 'success' });
@@ -289,7 +316,7 @@ router.get('/payments/tilopay/status/:order_id', requireAuth, async (req: Reques
   try {
     const { data: order } = await supabase
       .from('orders')
-      .select('id, payment_reference, payment_status, status, odoo_order_name')
+      .select('id, payment_reference, payment_status, status, odoo_order_id, odoo_order_name')
       .eq('id', orderId)
       .eq('user_id', userId)
       .single();
@@ -330,6 +357,8 @@ router.get('/payments/tilopay/status/:order_id', requireAuth, async (req: Reques
         status: 'confirmed',
         message: 'Pago confirmado via consulta Tilopay',
       });
+
+      syncPaymentToOdoo(order.odoo_order_id);
 
       res.json({ payment_status: 'paid', order_status: 'confirmed' });
     } else {
@@ -407,7 +436,7 @@ router.get('/payments/yappy/status/:order_id', requireAuth, async (req: Request,
   try {
     const { data: order } = await supabase
       .from('orders')
-      .select('id, total, payment_method, payment_reference, payment_status, status')
+      .select('id, total, payment_method, payment_reference, payment_status, status, odoo_order_id')
       .eq('id', orderId)
       .eq('user_id', userId)
       .single();
@@ -455,6 +484,8 @@ router.get('/payments/yappy/status/:order_id', requireAuth, async (req: Request,
         message: `Pago Yappy detectado (${match.debitorName ?? 'cliente'}, tx: ${match.transactionId ?? 'N/A'})`,
       });
 
+      syncPaymentToOdoo(order.odoo_order_id);
+
       logger.info(
         { orderId, yappyTx: match.transactionId, debitor: match.debitorName },
         'Yappy payment matched and confirmed',
@@ -487,7 +518,7 @@ router.post('/payments/yappy/confirm-manual/:order_id', requireAuth, async (req:
   try {
     const { data: order } = await supabase
       .from('orders')
-      .select('id, payment_method, payment_status, status')
+      .select('id, payment_method, payment_status, status, odoo_order_id')
       .eq('id', orderId)
       .eq('user_id', userId)
       .single();
@@ -521,6 +552,8 @@ router.post('/payments/yappy/confirm-manual/:order_id', requireAuth, async (req:
       status: 'confirmed',
       message: `Pago Yappy confirmado manualmente${confirmation_note ? ': ' + confirmation_note : ''}`,
     });
+
+    syncPaymentToOdoo(order.odoo_order_id);
 
     res.json({ message: 'Order confirmed', order_status: 'confirmed', payment_status: 'paid' });
   } catch (err) {

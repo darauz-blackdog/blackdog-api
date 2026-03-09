@@ -153,18 +153,23 @@ router.get('/auth/profile', requireAuth, async (req: Request, res: Response) => 
   const { id: userId } = (req as AuthenticatedRequest).user;
 
   try {
-    const { data, error } = await supabase
+    const { data: profile, error } = await supabase
       .from('customer_profiles')
-      .select('*, addresses:addresses(*)')
+      .select('*')
       .eq('id', userId)
       .single();
 
-    if (error || !data) {
+    if (error || !profile) {
       res.status(404).json({ error: 'Profile not found' });
       return;
     }
 
-    res.json(data);
+    const { data: addresses } = await supabase
+      .from('addresses')
+      .select('*')
+      .eq('user_id', userId);
+
+    res.json({ ...profile, addresses: addresses ?? [] });
   } catch (err) {
     logger.error({ err }, 'Get profile error');
     res.status(500).json({ error: 'Failed to fetch profile' });
