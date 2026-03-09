@@ -26,6 +26,7 @@ const ODOO_FIELDS = [
 const BASE_DOMAIN = [
   ['type', 'in', ['consu', 'product']],
   ['list_price', '>', 0],
+  ['available_in_pos', '=', true],
 ];
 
 function mapProduct(p: OdooProduct) {
