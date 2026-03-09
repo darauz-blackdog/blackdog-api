@@ -395,7 +395,7 @@ router.get('/orders', async (req: Request, res: Response) => {
   try {
     let query = supabase
       .from('orders')
-      .select('*', { count: 'exact' })
+      .select('*, order_items(quantity)', { count: 'exact' })
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
@@ -411,8 +411,16 @@ router.get('/orders', async (req: Request, res: Response) => {
       return;
     }
 
+    // Add item_count to each order and remove raw order_items
+    const ordersWithCount = (data ?? []).map((order: any) => {
+      const items = order.order_items ?? [];
+      const item_count = items.reduce((sum: number, i: any) => sum + (i.quantity ?? 0), 0);
+      const { order_items, ...rest } = order;
+      return { ...rest, item_count };
+    });
+
     res.json({
-      data,
+      data: ordersWithCount,
       pagination: {
         page,
         limit,
