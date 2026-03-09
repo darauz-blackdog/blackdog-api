@@ -735,6 +735,44 @@ router.get('/categories', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/stock/check
+ * Check stock availability for multiple products across branches
+ * Body: { product_ids: [1, 2, 3] }
+ */
+router.post('/stock/check', async (req: Request, res: Response) => {
+  const { product_ids } = req.body;
+
+  if (!Array.isArray(product_ids) || product_ids.length === 0) {
+    res.status(400).json({ error: 'product_ids array is required' });
+    return;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('stock_by_branch')
+      .select('product_id, branch_id, qty_available')
+      .in('product_id', product_ids)
+      .gt('qty_available', 0);
+
+    if (error) {
+      res.status(500).json({ error: 'Failed to check stock' });
+      return;
+    }
+
+    const byBranch: Record<number, Record<number, number>> = {};
+    for (const row of data ?? []) {
+      if (!byBranch[row.branch_id]) byBranch[row.branch_id] = {};
+      byBranch[row.branch_id][row.product_id] = Number(row.qty_available);
+    }
+
+    res.json({ data: byBranch });
+  } catch (err) {
+    logger.error({ err }, 'Stock check error');
+    res.status(500).json({ error: 'Failed to check stock' });
+  }
+});
+
+/**
  * GET /api/branches
  * List all store branches
  * Query: ?lat=9.0&lng=-79.5 → adds distance_km and sorts by nearest
@@ -755,7 +793,7 @@ router.get('/branches', async (req: Request, res: Response) => {
       return;
     }
 
-    let branches = data ?? [];
+    let branches = (data ?? []).filter((b: any) => b.is_active !== false);
 
     // Add distance and sort by nearest if coordinates provided
     if (hasCoords) {
