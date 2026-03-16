@@ -219,21 +219,11 @@ router.post('/orders', async (req: Request, res: Response) => {
             getAppTeamId(),
           ]);
 
-          const initialFulfillment = payment_method === 'in_store'
-            ? 'confirmed'
-            : 'awaiting_payment';
-
           const odooValues: Record<string, unknown> = {
             partner_id: profile.odoo_partner_id,
             order_line: orderLines,
             note: notes ?? '',
             warehouse_id: branch_id,
-            // ── blackdog_app_sales fields ──
-            app_delivery_method: delivery_type,
-            app_payment_method: PAYMENT_METHOD_MAP[payment_method] ?? payment_method,
-            app_customer_phone: profile.phone ?? '',
-            app_delivery_notes: notes ?? '',
-            app_fulfillment_state: initialFulfillment,
           };
 
           if (sourceId) odooValues.source_id = sourceId;
@@ -298,15 +288,9 @@ router.post('/orders', async (req: Request, res: Response) => {
       return;
     }
 
-    // 6b. Update Odoo order with Supabase order ref
+    // 6b. Log Supabase order ref (app_order_ref not on sale.order)
     if (odooOrderId) {
-      try {
-        await write('sale.order', [odooOrderId], {
-          app_order_ref: order.id,
-        });
-      } catch (refErr) {
-        logger.warn({ err: refErr }, 'Failed to set app_order_ref on Odoo order (non-blocking)');
-      }
+      logger.info({ odooOrderId, supabaseOrderId: order.id }, 'Linked Odoo sale.order to Supabase order');
     }
 
     // 7. Copy cart items to order_items
@@ -619,20 +603,8 @@ router.post('/admin/orders/:id/status', async (req: Request, res: Response) => {
     // Send push notification to the customer
     notifyOrderStatusChange(order.user_id, orderId, newStatus, message).catch(() => {});
 
-    // Sync fulfillment state to Odoo
-    if (order.odoo_order_id) {
-      const odooState = FULFILLMENT_STATE_MAP[newStatus];
-      if (odooState) {
-        try {
-          await write('sale.order', [order.odoo_order_id], {
-            app_fulfillment_state: odooState,
-          });
-          logger.info({ odooOrderId: order.odoo_order_id, odooState }, 'Synced fulfillment state to Odoo');
-        } catch (odooErr) {
-          logger.warn({ err: odooErr }, 'Failed to sync fulfillment state to Odoo (non-blocking)');
-        }
-      }
-    }
+    // Note: fulfillment state lives on blackdog.app.order, not sale.order
+    // TODO: Create/update blackdog.app.order when that integration is built
 
     logger.info({ orderId, oldStatus: order.status, newStatus }, 'Order status updated (admin)');
 
