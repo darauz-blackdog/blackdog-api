@@ -130,7 +130,7 @@ router.post('/payments/sdk/init-tilopay', requireAuth, async (req: Request, res:
   try {
     const { data: order } = await supabase
       .from('orders')
-      .select('id, total, status, payment_method, odoo_order_name, payment_reference')
+      .select('id, total, status, payment_method, odoo_order_name, payment_reference, payment_link')
       .eq('id', order_id)
       .eq('user_id', userId)
       .single();
@@ -149,8 +149,22 @@ router.post('/payments/sdk/init-tilopay', requireAuth, async (req: Request, res:
       await supabase.from('orders').update({ payment_reference: orderNumber, updated_at: new Date().toISOString() }).eq('id', order_id);
     }
 
-    const token = await getSDKToken();
-    res.json({ token, order_number: orderNumber, amount: order.total, currency: 'USD' });
+    // Try SDK V2 token first; fall back to stored payment link if not available
+    const paymentLink: string | null = (order as Record<string, unknown>).payment_link as string | null ?? null;
+    let sdkToken: string | null = null;
+
+    try {
+      sdkToken = await getSDKToken();
+    } catch {
+      logger.warn({ order_id }, 'Tilopay SDK token unavailable, using payment link fallback');
+    }
+
+    res.json({
+      order_number: orderNumber,
+      amount: order.total,
+      currency: 'USD',
+      ...(sdkToken ? { token: sdkToken } : { payment_link: paymentLink }),
+    });
   } catch (err) {
     logger.error({ err, order_id }, 'Tilopay SDK init error');
     res.status(500).json({ error: 'Failed to initialize payment SDK' });
