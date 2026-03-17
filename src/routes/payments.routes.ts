@@ -172,6 +172,45 @@ router.post('/payments/sdk/init-tilopay', requireAuth, async (req: Request, res:
 });
 
 /**
+ * POST /api/payments/sdk/init-yappy
+ * Validate the order and return the Yappy merchant ID (public) so the
+ * Flutter WebView bridge can configure the <yappy-button> web component.
+ */
+router.post('/payments/sdk/init-yappy', requireAuth, async (req: Request, res: Response) => {
+  const { id: userId } = (req as AuthenticatedRequest).user;
+  const { order_id } = req.body;
+  if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
+
+  try {
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, total, status, payment_method, odoo_order_name, payment_reference')
+      .eq('id', order_id)
+      .eq('user_id', userId)
+      .single();
+
+    if (!order) { res.status(404).json({ error: 'Order not found' }); return; }
+    if (order.status !== 'pending_payment') {
+      res.status(400).json({ error: `Order status is "${order.status}", expected "pending_payment"` }); return;
+    }
+    if (order.payment_method !== 'yappy') {
+      res.status(400).json({ error: `Payment method is "${order.payment_method}", expected "yappy"` }); return;
+    }
+
+    const orderNumber = order.payment_reference ?? order.odoo_order_name ?? `BDAPP-${order.id.slice(0, 8).toUpperCase()}`;
+
+    res.json({
+      order_number: orderNumber,
+      amount: order.total,
+      merchant_id: env.YAPPY_V2_MERCHANT_ID,
+    });
+  } catch (err) {
+    logger.error({ err, order_id }, 'Yappy init error');
+    res.status(500).json({ error: 'Failed to initialize Yappy payment' });
+  }
+});
+
+/**
  * GET /api/payments/tilopay/return
  * Tilopay redirects here after the customer pays (or cancels)
  * Query params from Tilopay: code, description, auth, order, tpt, OrderHash, returnData

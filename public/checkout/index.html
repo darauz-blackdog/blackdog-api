@@ -502,6 +502,11 @@
         sendToFlutter('ready', {});
 
       } else if (METHOD === 'yappy') {
+        const yappyBtn = document.querySelector('yappy-button');
+        if (yappyBtn && config.merchant_id) {
+          yappyBtn.setAttribute('mid', config.merchant_id);
+          yappyBtn.setAttribute('amount', AMOUNT.toFixed(2));
+        }
         loading.classList.add('hidden');
         document.getElementById('yappy-section').classList.remove('hidden');
         setupYappyButton();
