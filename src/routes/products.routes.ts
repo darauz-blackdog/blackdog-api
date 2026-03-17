@@ -738,6 +738,7 @@ router.get('/categories', async (req: Request, res: Response) => {
  * POST /api/stock/check
  * Check stock availability for multiple products across branches
  * Body: { product_ids: [1, 2, 3] }
+ * Returns: { data: { [branch_id]: { [product_id]: qty_available } } }
  */
 router.post('/stock/check', async (req: Request, res: Response) => {
   const { product_ids } = req.body;
@@ -759,6 +760,7 @@ router.post('/stock/check', async (req: Request, res: Response) => {
       return;
     }
 
+    // Group by branch_id → { product_id: qty }
     const byBranch: Record<number, Record<number, number>> = {};
     for (const row of data ?? []) {
       if (!byBranch[row.branch_id]) byBranch[row.branch_id] = {};

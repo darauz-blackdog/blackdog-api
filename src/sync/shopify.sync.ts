@@ -85,7 +85,7 @@ async function fetchOdooShopifyMapping(): Promise<Map<string, number>> {
       if (!records || records.length === 0) break;
 
       for (const r of records) {
-        if (r.shopify_tmpl_id && r.product_tmpl_id && r.product_tmpl_id !== false) {
+        if (r.shopify_tmpl_id && r.product_tmpl_id && (r.product_tmpl_id as unknown) !== false) {
           const odooId = Array.isArray(r.product_tmpl_id) ? r.product_tmpl_id[0] : r.product_tmpl_id;
           map.set(r.shopify_tmpl_id, odooId as number);
         }

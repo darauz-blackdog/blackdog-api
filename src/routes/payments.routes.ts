@@ -479,7 +479,7 @@ router.get('/payments/yappy/instructions/:order_id', requireAuth, async (req: Re
     }
 
     const instructions = getPaymentInstructions(
-      order.payment_reference ?? orderId.slice(0, 8).toUpperCase(),
+      order.payment_reference ?? String(orderId).slice(0, 8).toUpperCase(),
       order.total,
     );
 

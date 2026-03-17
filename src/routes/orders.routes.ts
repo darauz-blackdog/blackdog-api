@@ -81,6 +81,8 @@ router.post('/orders', async (req: Request, res: Response) => {
   const { id: userId } = (req as AuthenticatedRequest).user;
   const { delivery_type, branch_id, address_id, payment_method, notes } = req.body;
 
+  logger.info({ body: req.body, userId }, 'POST /orders request received');
+
   // Validate required fields
   if (!delivery_type || !['delivery', 'pickup'].includes(delivery_type)) {
     res.status(400).json({ error: 'delivery_type must be "delivery" or "pickup"' });
@@ -500,7 +502,7 @@ router.post('/orders/:id/cancel', async (req: Request, res: Response) => {
     });
 
     // Send push notification
-    notifyOrderStatusChange(userId, orderId, 'cancelled').catch(() => {});
+    notifyOrderStatusChange(userId, String(orderId), 'cancelled').catch(() => {});
 
     // Cancel in Odoo if exists
     if (order.odoo_order_id) {
@@ -601,7 +603,7 @@ router.post('/admin/orders/:id/status', async (req: Request, res: Response) => {
     });
 
     // Send push notification to the customer
-    notifyOrderStatusChange(order.user_id, orderId, newStatus, message).catch(() => {});
+    notifyOrderStatusChange(order.user_id, String(orderId), newStatus, message).catch(() => {});
 
     // Note: fulfillment state lives on blackdog.app.order, not sale.order
     // TODO: Create/update blackdog.app.order when that integration is built
