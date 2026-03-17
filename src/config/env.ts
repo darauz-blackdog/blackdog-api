@@ -39,6 +39,13 @@ const envSchema = z.object({
   YAPPY_COLLECTION_ALIAS: z.string().default(''),
   YAPPY_GROUP_ID: z.string().default(''),
   YAPPY_DEVICE_ID: z.string().default(''),
+
+  // Yappy V2 (Botón de Pago — Banco General)
+  YAPPY_V2_MERCHANT_ID: z.string().default(''),
+  YAPPY_V2_SECRET_KEY: z.string().default(''),
+  YAPPY_V2_DOMAIN: z.string().default(''),
+  YAPPY_V2_IPN_URL: z.string().default(''),
+  YAPPY_V2_API_URL: z.string().default('https://apipagosbg.bgeneral.cloud'),
 });
 
 const parsed = envSchema.safeParse(process.env);

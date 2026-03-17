@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Black Dog — Pago Seguro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --primary: #F7B104;
+      --navy: #1A1A2E;
+      --navy-light: #242447;
+      --surface: #1e1e3a;
+      --error: #ef4444;
+      --success: #22c55e;
+      --text: #f0f0f5;
+      --text-muted: #9999bb;
+      --border: rgba(255,255,255,0.1);
+      --input-bg: rgba(255,255,255,0.06);
+      --radius: 12px;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--navy);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px 20px 40px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 28px;
+    }
+    .header-logo {
+      width: 36px;
+      height: 36px;
+      background: var(--primary);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Montserrat', sans-serif;
+      font-weight: 700;
+      font-size: 14px;
+      color: var(--navy);
+    }
+    .header-title {
+      font-family: 'Montserrat', sans-serif;
+      font-weight: 700;
+      font-size: 16px;
+      color: var(--text);
+    }
+    .header-secure {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--success);
+    }
+
+    /* ── Amount Card ── */
+    .amount-card {
+      background: var(--navy-light);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      border: 1px solid var(--border);
+    }
+    .amount-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+    .amount-value {
+      font-family: 'Montserrat', sans-serif;
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--primary);
+    }
+    .amount-order {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* ── Form Card ── */
+    .form-card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 20px;
+      border: 1px solid var(--border);
+    }
+    .form-section-title {
+      font-family: 'Montserrat', sans-serif;
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text);
+      margin-bottom: 16px;
+    }
+
+    /* ── Tilopay overrides ── */
+    .payFormTilopay select,
+    .payFormTilopay input[type="text"] {
+      width: 100%;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 15px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: border-color 0.2s;
+    }
+    .payFormTilopay select:focus,
+    .payFormTilopay input[type="text"]:focus {
+      border-color: var(--primary);
+    }
+    .payFormTilopay select option {
+      background: var(--navy);
+      color: var(--text);
+    }
+    /* Hide saved cards select by default */
+    #tlpy_saved_cards { display: none; }
+    /* Hide phone div by default */
+    #tlpy_phone_number_div { display: none; }
+
+    /* ── Input label ── */
+    .input-label {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 5px;
+    }
+    .input-group { margin-bottom: 4px; }
+    .input-row { display: flex; gap: 10px; }
+    .input-row .input-group { flex: 1; }
+
+    /* ── Pay button ── */
+    .btn-pay {
+      width: 100%;
+      background: var(--primary);
+      color: var(--navy);
+      border: none;
+      border-radius: 10px;
+      font-family: 'Montserrat', sans-serif;
+      font-weight: 700;
+      font-size: 16px;
+      padding: 15px;
+      margin-top: 8px;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .btn-pay:active { transform: scale(0.98); opacity: 0.9; }
+    .btn-pay:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── Yappy ── */
+    .yappy-section { text-align: center; }
+    .yappy-info {
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .yappy-phone-group { margin-bottom: 16px; }
+    .yappy-phone-input {
+      width: 100%;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 18px;
+      padding: 14px;
+      text-align: center;
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: border-color 0.2s;
+      letter-spacing: 2px;
+    }
+    .yappy-phone-input:focus { border-color: var(--primary); }
+    .yappy-phone-input::placeholder { letter-spacing: 0; font-size: 14px; color: var(--text-muted); }
+    .yappy-component-wrapper {
+      display: flex;
+      justify-content: center;
+      margin-top: 8px;
+    }
+    yappy-button { display: block; }
+
+    /* ── Loading spinner ── */
+    #loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 200px;
+      gap: 14px;
+    }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid rgba(247,177,4,0.2);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { font-size: 14px; color: var(--text-muted); }
+
+    /* ── Processing overlay ── */
+    #processing-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(26,26,46,0.92);
+      z-index: 100;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+    #processing-overlay.active { display: flex; }
+    .processing-text {
+      font-family: 'Montserrat', sans-serif;
+      font-weight: 600;
+      font-size: 16px;
+      color: var(--text);
+    }
+
+    /* ── Error ── */
+    #error-msg {
+      display: none;
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 13px;
+      color: #fca5a5;
+      margin-top: 12px;
+    }
+    #error-msg.visible { display: block; }
+
+    /* ── 3DS container ── */
+    #responseTilopay { margin-top: 12px; }
+
+    /* ── Payment method selector (hide internal label) ── */
+    .method-select-group { margin-bottom: 16px; }
+
+    /* ── Hidden ── */
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-logo">BD</div>
+  <span class="header-title">Black Dog Panamá</span>
+  <span class="header-secure">🔒 Pago seguro</span>
+</div>
+
+<div class="amount-card">
+  <div class="amount-label">Total a pagar</div>
+  <div class="amount-value" id="display-amount">$0.00</div>
+  <div class="amount-order" id="display-order"></div>
+</div>
+
+<!-- Loading state (shown until initPayment is called) -->
+<div id="loading">
+  <div class="spinner"></div>
+  <span class="loading-text">Iniciando pago seguro...</span>
+</div>
+
+<!-- Tilopay card form (hidden until loaded) -->
+<div id="tilopay-section" class="hidden">
+  <div class="form-card">
+    <div class="form-section-title">Datos de la tarjeta</div>
+    <div class="payFormTilopay">
+      <!-- Payment method selector (SDK populates this) -->
+      <div class="method-select-group hidden" id="method-select-wrapper">
+        <select id="tlpy_payment_method"></select>
+      </div>
+
+      <!-- Card fields -->
+      <div id="tlpy_card_payment_div">
+        <select id="tlpy_saved_cards"></select>
+
+        <div class="input-group">
+          <div class="input-label">Número de tarjeta</div>
+          <input type="text" id="tlpy_cc_number" placeholder="0000 0000 0000 0000" inputmode="numeric">
+        </div>
+
+        <div class="input-row">
+          <div class="input-group">
+            <div class="input-label">Vencimiento</div>
+            <input type="text" id="tlpy_cc_expiration_date" placeholder="MM/AA" inputmode="numeric" maxlength="5">
+          </div>
+          <div class="input-group">
+            <div class="input-label">CVV</div>
+            <input type="text" id="tlpy_cvv" placeholder="123" inputmode="numeric" maxlength="4">
+          </div>
+        </div>
+      </div>
+
+      <!-- Phone field for Yappy via Tilopay -->
+      <div id="tlpy_phone_number_div">
+        <div class="input-group">
+          <div class="input-label">Teléfono Yappy</div>
+          <input type="text" id="tlpy_phone_number" placeholder="6XXXXXXX" inputmode="tel">
+        </div>
+      </div>
+    </div>
+
+    <div id="error-msg"></div>
+    <div id="responseTilopay"></div>
+
+    <button class="btn-pay" id="btn-tilopay-pay" onclick="processTilopayPayment()">
+      Pagar ahora
+    </button>
+  </div>
+</div>
+
+<!-- Yappy section (hidden until loaded) -->
+<div id="yappy-section" class="hidden">
+  <div class="form-card">
+    <div class="form-section-title">Pagar con Yappy</div>
+    <div class="yappy-section">
+      <div class="yappy-info">
+        Ingresa tu número de teléfono Yappy. Recibirás una notificación en tu app para confirmar el pago.
+      </div>
+
+      <div class="yappy-phone-group">
+        <div class="input-label" style="text-align:left">Teléfono Yappy (Panamá)</div>
+        <input
+          type="tel"
+          id="yappy-phone-input"
+          class="yappy-phone-input"
+          placeholder="Ej: 6000-0000"
+          inputmode="tel"
+          maxlength="9"
+        >
+      </div>
+
+      <div id="error-msg-yappy" style="display:none;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:12px 14px;font-size:13px;color:#fca5a5;margin-bottom:12px;"></div>
+
+      <div class="yappy-component-wrapper">
+        <yappy-button theme="brand" rounded="true"></yappy-button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Processing overlay -->
+<div id="processing-overlay">
+  <div class="spinner"></div>
+  <div class="processing-text">Procesando pago...</div>
+</div>
+
+<!-- Tilopay SDK -->
+<script src="https://app.tilopay.com/sdk/v2/sdk_tpay.min.js"></script>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────
+  const params = new URLSearchParams(window.location.search);
+  const METHOD = params.get('method') ?? 'tilopay';
+  const AMOUNT = parseFloat(params.get('amount') ?? '0');
+  const ORDER_NUMBER = params.get('order_number') ?? '';
+
+  // Update display
+  document.getElementById('display-amount').textContent =
+    '$' + AMOUNT.toFixed(2);
+  if (ORDER_NUMBER) {
+    document.getElementById('display-order').textContent =
+      'Pedido ' + ORDER_NUMBER;
+  }
+
+  // Load Yappy CDN only when needed
+  if (METHOD === 'yappy') {
+    const s = document.createElement('script');
+    s.src = 'https://bt-cdn.yappy.cloud/v1/cdn/web-component-btn-yappy.js';
+    document.head.appendChild(s);
+  }
+
+  // ── Flutter bridge helpers ─────────────────────────────────────
+  function sendToFlutter(type, data) {
+    const msg = JSON.stringify({ type, ...data });
+    if (window.FlutterBridge) {
+      window.FlutterBridge.postMessage(msg);
+    } else {
+      console.log('[Bridge]', msg);
+    }
+  }
+
+  function showProcessing() {
+    document.getElementById('processing-overlay').classList.add('active');
+  }
+
+  function hideProcessing() {
+    document.getElementById('processing-overlay').classList.remove('active');
+  }
+
+  function showError(msg, isYappy) {
+    if (isYappy) {
+      const el = document.getElementById('error-msg-yappy');
+      el.textContent = msg;
+      el.style.display = 'block';
+    } else {
+      const el = document.getElementById('error-msg');
+      el.textContent = msg;
+      el.classList.add('visible');
+    }
+  }
+
+  function clearError(isYappy) {
+    if (isYappy) {
+      const el = document.getElementById('error-msg-yappy');
+      el.style.display = 'none';
+      el.textContent = '';
+    } else {
+      const el = document.getElementById('error-msg');
+      el.classList.remove('visible');
+      el.textContent = '';
+    }
+  }
+
+  // ── initPayment — called by Flutter after WebView loads ────────
+  // config: { token, order_number, amount, currency, redirect_url,
+  //           first_name, last_name, email, phone, bill_to_address }
+  window.initPayment = async function(config) {
+    const loading = document.getElementById('loading');
+
+    try {
+      if (METHOD === 'tilopay') {
+        loading.querySelector('.loading-text').textContent = 'Cargando formulario...';
+
+        const result = await Tilopay.Init({
+          token: config.token,
+          currency: config.currency ?? 'USD',
+          language: 'es',
+          amount: AMOUNT,
+          billToFirstName: config.first_name ?? 'Cliente',
+          billToLastName: config.last_name ?? '',
+          billToAddress: config.bill_to_address ?? 'Panama City',
+          billToCity: 'Panama',
+          billToState: 'PA',
+          billToCountry: 'PA',
+          billToEmail: config.email ?? '',
+          billToTelephone: config.phone ?? '',
+          orderNumber: ORDER_NUMBER || config.order_number,
+          capture: 1,
+          redirect: config.redirect_url,
+          subscription: 0,
+          hashVersion: 'V2',
+        });
+
+        if (result.error) {
+          throw new Error('SDK init error: ' + result.error);
+        }
+
+        // Populate payment method select (hide if only 1 method)
+        const methodSelect = document.getElementById('tlpy_payment_method');
+        if (result.methods && result.methods.length > 1) {
+          result.methods.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.text = m.name;
+            methodSelect.appendChild(opt);
+          });
+          document.getElementById('method-select-wrapper').classList.remove('hidden');
+
+          // Show/hide phone field for Yappy via Tilopay
+          methodSelect.addEventListener('change', function() {
+            const isYappy = String(this.value).includes(':18');
+            document.getElementById('tlpy_phone_number_div').style.display = isYappy ? 'block' : 'none';
+            document.getElementById('tlpy_card_payment_div').style.display = isYappy ? 'none' : 'block';
+          });
+        } else if (result.methods && result.methods.length === 1) {
+          const opt = document.createElement('option');
+          opt.value = result.methods[0].id;
+          opt.text = result.methods[0].name;
+          methodSelect.appendChild(opt);
+        }
+
+        loading.classList.add('hidden');
+        document.getElementById('tilopay-section').classList.remove('hidden');
+        sendToFlutter('ready', {});
+
+      } else if (METHOD === 'yappy') {
+        loading.classList.add('hidden');
+        document.getElementById('yappy-section').classList.remove('hidden');
+        setupYappyButton();
+        sendToFlutter('ready', {});
+      }
+    } catch (err) {
+      loading.classList.add('hidden');
+      sendToFlutter('error', { message: err.message ?? 'Error al inicializar el pago' });
+    }
+  };
+
+  // ── Tilopay payment ────────────────────────────────────────────
+  window.processTilopayPayment = async function() {
+    clearError(false);
+    const btn = document.getElementById('btn-tilopay-pay');
+    btn.disabled = true;
+    showProcessing();
+    sendToFlutter('processing', {});
+
+    try {
+      const result = await Tilopay.startPayment();
+      if (result && result !== 'Success') {
+        hideProcessing();
+        btn.disabled = false;
+        showError(result, false);
+        sendToFlutter('error', { message: String(result) });
+      }
+      // On success, Tilopay redirects to redirect_url — bridge catches the return
+    } catch (err) {
+      hideProcessing();
+      btn.disabled = false;
+      showError(err.message ?? 'Error al procesar el pago', false);
+      sendToFlutter('error', { message: err.message ?? 'Error al procesar el pago' });
+    }
+  };
+
+  // ── Yappy button setup ─────────────────────────────────────────
+  function setupYappyButton() {
+    const yappyButton = document.querySelector('yappy-button');
+    if (!yappyButton) {
+      setTimeout(setupYappyButton, 200);
+      return;
+    }
+
+    yappyButton.addEventListener('isYappyOnline', function(e) {
+      if (e.detail === false) {
+        showError('Yappy no está disponible en este momento. Por favor usa otro método de pago.', true);
+      }
+    });
+
+    yappyButton.addEventListener('eventClick', async function() {
+      clearError(true);
+      const phone = document.getElementById('yappy-phone-input').value.replace(/\D/g, '');
+
+      if (!phone || phone.length < 7 || !phone.startsWith('6')) {
+        showError('Ingresa un número de teléfono Yappy válido (Ej: 6000-0000)', true);
+        return;
+      }
+
+      yappyButton.isButtonLoading = true;
+      sendToFlutter('yappy_click', { phone });
+      // Flutter calls setYappyPayment() with the result
+    });
+
+    yappyButton.addEventListener('eventSuccess', function() {
+      hideProcessing();
+      sendToFlutter('success', { method: 'yappy' });
+    });
+
+    yappyButton.addEventListener('eventError', function(e) {
+      hideProcessing();
+      yappyButton.isButtonLoading = false;
+      const msg = e.detail?.message ?? 'Pago Yappy no completado';
+      showError(msg, true);
+      sendToFlutter('error', { message: msg });
+    });
+  }
+
+  // ── setYappyPayment — called by Flutter with create-order result ─
+  window.setYappyPayment = function(data) {
+    // data: { transactionId, token, documentName }
+    const yappyButton = document.querySelector('yappy-button');
+    if (yappyButton) {
+      showProcessing();
+      yappyButton.eventPayment = {
+        transactionId: data.transactionId,
+        token: data.token,
+        documentName: data.documentName,
+      };
+    }
+  };
+
+  // ── setYappyError — called by Flutter if create-order fails ────
+  window.setYappyError = function(message) {
+    const yappyButton = document.querySelector('yappy-button');
+    if (yappyButton) yappyButton.isButtonLoading = false;
+    showError(message ?? 'Error al iniciar pago Yappy', true);
+  };
+</script>
+</body>
+</html>

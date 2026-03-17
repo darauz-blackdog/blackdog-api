@@ -212,3 +212,19 @@ export async function getPaymentStatus(orderNumber: string): Promise<PaymentStat
 
   return null;
 }
+
+/**
+ * Get SDK token for Tilopay SDK V2 frontend integration.
+ * Used by Tilopay.Init() in the HTML bridge page.
+ */
+export async function getSDKToken(): Promise<string> {
+  const { TILOPAY_API_KEY } = env;
+  if (!TILOPAY_API_KEY) throw new Error('Tilopay API key not configured');
+
+  const response = await makeRequest<{ token?: string; type?: string; message?: string }>(
+    'POST', '/api/v1/tokenize', { key: TILOPAY_API_KEY }
+  );
+
+  if (response.token) return response.token;
+  throw new Error(`Tilopay SDK token failed: ${response.message ?? JSON.stringify(response)}`);
+}
