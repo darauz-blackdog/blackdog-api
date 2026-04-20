@@ -13,10 +13,7 @@ const router = Router();
 
 router.use('/orders', requireAuth);
 
-// Delivery fee removed — ASAP handles delivery and charges the customer directly.
-// TODO: In the future, consider accepting delivery_type: 'asap' or a delivery_provider
-// field to distinguish ASAP orders from legacy ones.
-const DELIVERY_FEE_DEFAULT = 0;
+// Pickup-only mode — delivery not available. ASAP handles delivery externally.
 
 // ── Cached Odoo IDs for BlackDog App module ──
 let cachedUtmSourceId: number | null = null;
@@ -79,27 +76,29 @@ const FULFILLMENT_STATE_MAP: Record<string, string> = {
  */
 router.post('/orders', async (req: Request, res: Response) => {
   const { id: userId } = (req as AuthenticatedRequest).user;
-  const { delivery_type, branch_id, address_id, payment_method, notes } = req.body;
+  const { delivery_type: rawDeliveryType, branch_id, payment_method, notes } = req.body;
+
+  // Pickup-only rule: normalize any non-pickup value and log a warning
+  const delivery_type = 'pickup';
+  if (rawDeliveryType && rawDeliveryType !== 'pickup') {
+    logger.warn(
+      { userId, raw: rawDeliveryType, route: 'POST /api/orders' },
+      'pickup-only rule: non-pickup delivery_type coerced to pickup'
+    );
+  }
 
   logger.info({ body: req.body, userId }, 'POST /orders request received');
 
   // Validate required fields
-  if (!delivery_type || !['delivery', 'pickup'].includes(delivery_type)) {
-    res.status(400).json({ error: 'delivery_type must be "delivery" or "pickup"' });
-    return;
-  }
   if (!payment_method || !['tilopay', 'yappy', 'in_store'].includes(payment_method)) {
     res.status(400).json({ error: 'payment_method must be "tilopay", "yappy", or "in_store"' });
     return;
   }
-  if (delivery_type === 'delivery' && !address_id) {
-    res.status(400).json({ error: 'address_id is required for delivery orders' });
-    return;
-  }
   if (!branch_id) {
-    res.status(400).json({ error: 'branch_id is required' });
+    res.status(400).json({ error: 'branch_id required (pickup-only mode)' });
     return;
   }
+  const effectiveAddressId: number | null = null; // always null in pickup-only mode
 
   try {
     // 1. Get active cart with items
@@ -182,7 +181,7 @@ router.post('/orders', async (req: Request, res: Response) => {
       (sum, item) => sum + (item.product_price ?? 0) * item.quantity,
       0
     );
-    const deliveryFee = delivery_type === 'delivery' ? DELIVERY_FEE_DEFAULT : 0;
+    const deliveryFee = 0; // pickup-only: no delivery fee
     const total = Math.round((subtotal + deliveryFee) * 100) / 100;
 
     // 4. Get customer's Odoo partner ID + phone
@@ -272,7 +271,7 @@ router.post('/orders', async (req: Request, res: Response) => {
         status: payment_method === 'in_store' ? 'confirmed' : 'pending_payment',
         delivery_type,
         branch_id,
-        address_id: delivery_type === 'delivery' ? address_id : null,
+        address_id: effectiveAddressId, // always null in pickup-only mode
         payment_method,
         payment_status: payment_method === 'in_store' ? 'pending' : 'pending',
         payment_reference: orderNumber,
