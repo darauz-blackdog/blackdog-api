@@ -46,6 +46,12 @@ const envSchema = z.object({
   YAPPY_V2_DOMAIN: z.string().default(''),
   YAPPY_V2_IPN_URL: z.string().default(''),
   YAPPY_V2_API_URL: z.string().default('https://apipagosbg.bgeneral.cloud'),
+
+  // Admin API key (separate from Supabase service role)
+  ADMIN_API_KEY: z.string().min(32).optional(),
+
+  // CORS origin allowlist (comma-separated). Empty = block all browser origins.
+  CORS_ALLOWED_ORIGINS: z.string().default(''),
 });
 
 const parsed = envSchema.safeParse(process.env);

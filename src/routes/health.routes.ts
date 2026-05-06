@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { testConnection } from '../config/odoo.js';
 import { supabase } from '../config/supabase.js';
 import { env } from '../config/env.js';
+import { requireAdminKey } from '../middleware/admin-auth.js';
 
 const router = Router();
 
@@ -35,7 +36,7 @@ router.get('/health', async (_req, res) => {
  * Detailed status endpoint for admin panel.
  * Returns Odoo DB info, Tilopay health, Supabase health, and Yappy config status.
  */
-router.get('/admin/status', async (_req, res) => {
+router.get('/admin/status', requireAdminKey, async (_req, res) => {
   const result: Record<string, unknown> = {
     timestamp: new Date().toISOString(),
   };

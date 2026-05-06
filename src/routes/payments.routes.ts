@@ -4,7 +4,10 @@ import { supabase } from '../config/supabase.js';
 import { write } from '../config/odoo.js';
 import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validate.js';
+import { initPaymentSchema } from '../schemas/payments.schema.js';
 import { createPaymentLink, getPaymentStatus, getSDKToken } from '../services/tilopay.service.js';
+import { env } from '../config/env.js';
 import { isYappyConfigured, findMatchingPayment, getPaymentInstructions } from '../services/yappy.service.js';
 import { confirmSaleOrder } from '../services/odoo-order.service.js';
 
@@ -31,14 +34,9 @@ function syncPaymentToOdoo(odooOrderId: number | null | undefined) {
  * Generate a Tilopay payment link for a pending_payment order
  * Body: { order_id }
  */
-router.post('/payments/tilopay/create-link', requireAuth, async (req: Request, res: Response) => {
+router.post('/payments/tilopay/create-link', requireAuth, validateBody(initPaymentSchema), async (req: Request, res: Response) => {
   const { id: userId } = (req as AuthenticatedRequest).user;
   const { order_id } = req.body;
-
-  if (!order_id) {
-    res.status(400).json({ error: 'order_id is required' });
-    return;
-  }
 
   try {
     // Get the order
@@ -122,10 +120,9 @@ router.post('/payments/tilopay/create-link', requireAuth, async (req: Request, r
  * POST /api/payments/sdk/init-tilopay
  * Generate SDK token for Tilopay SDK V2 embedded payment form.
  */
-router.post('/payments/sdk/init-tilopay', requireAuth, async (req: Request, res: Response) => {
+router.post('/payments/sdk/init-tilopay', requireAuth, validateBody(initPaymentSchema), async (req: Request, res: Response) => {
   const { id: userId } = (req as AuthenticatedRequest).user;
   const { order_id } = req.body;
-  if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
 
   try {
     const { data: order } = await supabase
@@ -176,10 +173,9 @@ router.post('/payments/sdk/init-tilopay', requireAuth, async (req: Request, res:
  * Validate the order and return the Yappy merchant ID (public) so the
  * Flutter WebView bridge can configure the <yappy-button> web component.
  */
-router.post('/payments/sdk/init-yappy', requireAuth, async (req: Request, res: Response) => {
+router.post('/payments/sdk/init-yappy', requireAuth, validateBody(initPaymentSchema), async (req: Request, res: Response) => {
   const { id: userId } = (req as AuthenticatedRequest).user;
   const { order_id } = req.body;
-  if (!order_id) { res.status(400).json({ error: 'order_id is required' }); return; }
 
   try {
     const { data: order } = await supabase

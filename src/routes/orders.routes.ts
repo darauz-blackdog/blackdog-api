@@ -4,6 +4,9 @@ import { supabase } from '../config/supabase.js';
 import { create, searchRead, execute_kw, write } from '../config/odoo.js';
 import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
+import { requireAdminKey } from '../middleware/admin-auth.js';
+import { validateBody } from '../middleware/validate.js';
+import { createOrderSchema, adminOrderStatusSchema } from '../schemas/orders.schema.js';
 import { createPaymentLink } from '../services/tilopay.service.js';
 import { getPaymentInstructions } from '../services/yappy.service.js';
 import { notifyOrderStatusChange } from '../services/push.service.js';
@@ -74,7 +77,7 @@ const FULFILLMENT_STATE_MAP: Record<string, string> = {
  * Create a new order from the active cart
  * Body: { delivery_type, branch_id, address_id?, payment_method, notes? }
  */
-router.post('/orders', async (req: Request, res: Response) => {
+router.post('/orders', validateBody(createOrderSchema), async (req: Request, res: Response) => {
   const { id: userId } = (req as AuthenticatedRequest).user;
   const { delivery_type: rawDeliveryType, branch_id, payment_method, notes } = req.body;
 
@@ -87,17 +90,8 @@ router.post('/orders', async (req: Request, res: Response) => {
     );
   }
 
-  logger.info({ body: req.body, userId }, 'POST /orders request received');
+  logger.info({ userId, branch_id, payment_method, hasNotes: !!notes }, 'POST /orders request');
 
-  // Validate required fields
-  if (!payment_method || !['tilopay', 'yappy', 'in_store'].includes(payment_method)) {
-    res.status(400).json({ error: 'payment_method must be "tilopay", "yappy", or "in_store"' });
-    return;
-  }
-  if (!branch_id) {
-    res.status(400).json({ error: 'branch_id required (pickup-only mode)' });
-    return;
-  }
   const effectiveAddressId: number | null = null; // always null in pickup-only mode
 
   try {
@@ -534,25 +528,17 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
 /**
  * POST /api/admin/orders/:id/status
  * Update order status (for Odoo webhooks or admin panel).
- * Authenticated via X-API-Key header matching SUPABASE_SERVICE_ROLE_KEY.
+ * Authenticated via X-API-Key header matching ADMIN_API_KEY (constant-time).
  *
  * Body: { status, message?, driver_name?, driver_phone? }
  */
-router.post('/admin/orders/:id/status', async (req: Request, res: Response) => {
-  // Authenticate via API key (service role key)
-  const apiKey = req.headers['x-api-key'] as string;
-  if (!apiKey || apiKey !== process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    res.status(401).json({ error: 'Invalid API key' });
-    return;
-  }
-
+router.post(
+  '/admin/orders/:id/status',
+  requireAdminKey,
+  validateBody(adminOrderStatusSchema),
+  async (req: Request, res: Response) => {
   const orderId = req.params.id;
   const { status: newStatus, message, driver_name, driver_phone } = req.body;
-
-  if (!newStatus) {
-    res.status(400).json({ error: 'status is required' });
-    return;
-  }
 
   try {
     // Get current order (use service role supabase — no RLS)

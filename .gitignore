@@ -2,3 +2,7 @@ node_modules/
 dist/
 .env
 *.log
+
+# Backups y archivos pre-update (audit 2026-05-06)
+.env.bak*
+*.pre-update

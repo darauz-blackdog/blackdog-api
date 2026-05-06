@@ -5,21 +5,26 @@ import { create, write as odooWrite } from '../config/odoo.js';
 import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rate-limit.js';
+import { validateBody } from '../middleware/validate.js';
+import { registerSchema, completeProfileSchema, updateProfileSchema } from '../schemas/auth.schema.js';
 
 const router = Router();
+
+// Hash email for logs — never log raw emails
+function hashEmail(email: string): string {
+  if (!email) return '<empty>';
+  const [local, domain] = email.split('@');
+  if (!domain) return '<invalid>';
+  return `${local.slice(0, 2)}***@${domain}`;
+}
 
 /**
  * POST /api/auth/register
  * Register a new user with email/password via Supabase Auth,
  * create customer_profile and Odoo res.partner.
  */
-router.post('/auth/register', authLimiter, async (req: Request, res: Response) => {
+router.post('/auth/register', authLimiter, validateBody(registerSchema), async (req: Request, res: Response) => {
   const { email, password, full_name, phone } = req.body;
-
-  if (!email || !password) {
-    res.status(400).json({ error: 'Email and password are required' });
-    return;
-  }
 
   try {
     // 1. Create Supabase auth user
@@ -48,9 +53,9 @@ router.post('/auth/register', authLimiter, async (req: Request, res: Response) =
         customer_rank: 1,
         comment: 'Created from BlackDog App',
       });
-      logger.info({ odooPartnerId, email }, 'Created Odoo partner');
+      logger.info({ odooPartnerId, email: hashEmail(email) }, 'Created Odoo partner');
     } catch (odooErr) {
-      logger.warn({ err: odooErr, email }, 'Failed to create Odoo partner (non-blocking)');
+      logger.warn({ err: odooErr, email: hashEmail(email) }, 'Failed to create Odoo partner (non-blocking)');
     }
 
     // 3. Create customer_profile
@@ -84,7 +89,7 @@ router.post('/auth/register', authLimiter, async (req: Request, res: Response) =
  * Called after social login (Google/Apple) to create profile + Odoo partner.
  * Requires auth token.
  */
-router.post('/auth/complete-profile', requireAuth, async (req: Request, res: Response) => {
+router.post('/auth/complete-profile', requireAuth, validateBody(completeProfileSchema), async (req: Request, res: Response) => {
   const { id: userId, email } = (req as AuthenticatedRequest).user;
   const { full_name, phone } = req.body;
 
@@ -118,7 +123,7 @@ router.post('/auth/complete-profile', requireAuth, async (req: Request, res: Res
         comment: 'Created from BlackDog App (social login)',
       });
     } catch (odooErr) {
-      logger.warn({ err: odooErr, email }, 'Failed to create Odoo partner');
+      logger.warn({ err: odooErr, email: hashEmail(email) }, 'Failed to create Odoo partner');
     }
 
     // Create profile
@@ -180,7 +185,7 @@ router.get('/auth/profile', requireAuth, async (req: Request, res: Response) => 
  * PUT /api/auth/profile
  * Update current user's profile
  */
-router.put('/auth/profile', requireAuth, async (req: Request, res: Response) => {
+router.put('/auth/profile', requireAuth, validateBody(updateProfileSchema), async (req: Request, res: Response) => {
   const { id: userId } = (req as AuthenticatedRequest).user;
   const { full_name, phone } = req.body;
 

@@ -20,9 +20,27 @@ import { startSyncJobs } from './sync/scheduler.js';
 
 const app = express();
 
-// Security & parsing
-app.use(cors());
-app.use(express.json());
+// Trust nginx — required for express-rate-limit to read real client IPs
+// from X-Forwarded-For. Hardcoded to 1 hop (nginx is the only proxy).
+app.set('trust proxy', 1);
+
+// CORS allowlist. Mobile apps don't send Origin, so non-browser callers pass
+// through. Only listed browser origins are allowed; CORS_ALLOWED_ORIGINS is a
+// comma-separated env var.
+const allowedOrigins = env.CORS_ALLOWED_ORIGINS
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // mobile / curl / server-to-server
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(null, false); // disallow without throwing — browser sees CORS error
+  },
+  credentials: true,
+}));
+app.use(express.json({ limit: '256kb' }));
 
 // Static pages (no helmet — served to WebView)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -62,6 +80,18 @@ app.use('/api', addressesRoutes);
 
 // Error handler (must be last)
 app.use(errorHandler);
+
+// Global error handlers — log and let process manager restart.
+// Without these, async exceptions crash silently with stale logs.
+process.on('uncaughtException', (err) => {
+  logger.fatal({ err }, 'Uncaught exception — shutting down');
+  // Flush logs then exit; systemd will restart.
+  setTimeout(() => process.exit(1), 100);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.error({ reason }, 'Unhandled promise rejection');
+});
 
 // Start server
 app.listen(parseInt(env.PORT), '0.0.0.0', () => {

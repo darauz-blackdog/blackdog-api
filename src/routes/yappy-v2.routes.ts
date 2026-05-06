@@ -3,15 +3,16 @@ import type { Request, Response } from 'express';
 import { supabase } from '../config/supabase.js';
 import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validate.js';
+import { yappyCreateOrderSchema } from '../schemas/payments.schema.js';
 import { createYappyOrder, verifyIPNHash, isYappyV2Configured } from '../services/yappy-v2.service.js';
 
 const router = Router();
 
-router.post('/payments/yappy-v2/create-order', requireAuth, async (req: Request, res: Response) => {
+router.post('/payments/yappy-v2/create-order', requireAuth, validateBody(yappyCreateOrderSchema), async (req: Request, res: Response) => {
   const { id: userId } = (req as AuthenticatedRequest).user;
   const { order_id, phone } = req.body;
 
-  if (!order_id || !phone) { res.status(400).json({ error: 'order_id and phone are required' }); return; }
   if (!isYappyV2Configured()) { res.status(503).json({ error: 'Yappy V2 not configured' }); return; }
 
   try {

@@ -3,6 +3,8 @@ import type { Request, Response } from 'express';
 import { supabase } from '../config/supabase.js';
 import { logger } from '../config/logger.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validate.js';
+import { addCartItemSchema, updateCartItemSchema } from '../schemas/cart.schema.js';
 
 const router = Router();
 
@@ -73,7 +75,7 @@ router.get('/cart', async (req: Request, res: Response) => {
  * Add item to cart (or update quantity if already exists)
  * Body: { product_id, quantity }
  */
-router.post('/cart/items', async (req: Request, res: Response) => {
+router.post('/cart/items', validateBody(addCartItemSchema), async (req: Request, res: Response) => {
   const { id: userId } = (req as AuthenticatedRequest).user;
   const { product_id, quantity = 1 } = req.body;
 
@@ -193,7 +195,7 @@ router.post('/cart/items', async (req: Request, res: Response) => {
  * Update cart item quantity
  * Body: { quantity }
  */
-router.put('/cart/items/:id', async (req: Request, res: Response) => {
+router.put('/cart/items/:id', validateBody(updateCartItemSchema), async (req: Request, res: Response) => {
   const { id: userId } = (req as AuthenticatedRequest).user;
   const itemId = req.params.id;
   const { quantity } = req.body;
